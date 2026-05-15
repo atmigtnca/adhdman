@@ -193,6 +193,155 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 
 The dashboard is read-only by design: the refresh control only re-fetches `GET /dashboard`. Do not expose this app directly to the public internet; keep it bound to `127.0.0.1` or behind SSH tunneling, VPN, or another trusted access-control layer.
 
+## Phase 6 Execution Helpers
+
+Phase 6 adds a small set of opinionated execution helpers on top of the Phase 1–5 capture/resolve/dashboard core. These helpers do not capture new data — they help with starting, continuing, or surviving when the existing surfaces feel too heavy. Helpers are local-only, single-user, state-light, recoverable via `/undo`, and use non-shaming tone strings from `backend/app/copy.py`.
+
+The helpers never call a remote presence service. Body-double is a local timer + render contract. Mutations write `actions` rows so `/undo` reverses them like any other Phase 3 change. The web dashboard surfaces focus/body-double/survival state read-only — no start/stop controls on the web side.
+
+### Focus (one thing)
+
+```bash
+curl -s http://127.0.0.1:8000/focus/current
+curl -s -X POST http://127.0.0.1:8000/focus/start \
+  -H 'Content-Type: application/json' \
+  -d '{"target_type":"task","target_id":1}'
+curl -s -X POST http://127.0.0.1:8000/focus/stop
+```
+
+Only one focus session is active at a time. Starting a second session without `"replace": true` returns a 409 with a structured `existing` payload rather than silently swapping.
+
+### Breakdown
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/tasks/1/breakdown/suggest \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+curl -s -X POST http://127.0.0.1:8000/tasks/1/breakdown \
+  -H 'Content-Type: application/json' \
+  -d '{"steps":["open the document","write one paragraph"],"source":"manual"}'
+curl -s http://127.0.0.1:8000/tasks/1/children
+```
+
+Children are normal task rows linked by `parent_task_id`; a single `breakdown` action covers all children, so one `/undo` reverses the whole split. Suggestions are deterministic and rules-only in this phase.
+
+### Block reset (stuck)
+
+```bash
+curl -s "http://127.0.0.1:8000/stuck/options?target_type=task&target_id=1"
+curl -s -X POST http://127.0.0.1:8000/stuck \
+  -H 'Content-Type: application/json' \
+  -d '{"target_type":"task","target_id":1,"choice":"shrink"}'
+```
+
+`choice` is one of `shrink`, `swap`, `skip`, `park`. The prompt and labels come from the shared non-shaming copy library so TUI and web render the same text.
+
+### Body double
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/body-double/start \
+  -H 'Content-Type: application/json' \
+  -d '{"interval_seconds":300}'
+curl -s -X POST http://127.0.0.1:8000/body-double/check-in
+curl -s http://127.0.0.1:8000/body-double/current
+curl -s -X POST http://127.0.0.1:8000/body-double/stop
+```
+
+`interval_seconds` must fall between `BODY_DOUBLE_MIN_INTERVAL` and `BODY_DOUBLE_MAX_INTERVAL`. No external call is made — heartbeats are recorded locally on the active `focus_sessions` row.
+
+### Minimum viable step (mvs)
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/mvs/suggest \
+  -H 'Content-Type: application/json' \
+  -d '{"target_type":"task","target_id":1}'
+curl -s -X POST http://127.0.0.1:8000/mvs/commit \
+  -H 'Content-Type: application/json' \
+  -d '{"target_type":"task","target_id":1,"step":"open the document"}'
+```
+
+`/mvs/commit` creates a child task carrying the step and starts a focus session on it; both actions are individually reversible via `/undo`.
+
+### Survival mode
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/survival/enter \
+  -H 'Content-Type: application/json' -d '{}'
+curl -s http://127.0.0.1:8000/survival
+curl -s http://127.0.0.1:8000/dashboard
+curl -s -X POST http://127.0.0.1:8000/survival/exit \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+Survival mode is a filter, not a delete: while active, `/dashboard` clamps tasks and events to `SURVIVAL_MAX_TASKS` and `SURVIVAL_MAX_EVENTS`. Nothing is removed and capture still works.
+
+### TUI commands
+
+Phase 6 maps each helper to a slash command. Target arguments index into the most recent listing in the same TUI session (free-form text is never used as a mutation target). `/body-double N` is the exception: `N` is a local check-in interval in seconds.
+
+```
+/focus            show current focus session
+/focus N          focus on item N from the last listing
+/focus stop       end the focus session
+/breakdown N      suggest 2–5 micro-steps for task N
+/breakdown commit persist the last suggestion as child tasks
+/stuck            show block-reset options
+/stuck CHOICE     apply shrink|swap|skip|park to the last-selected task
+/body-double N    start a body-double timer with N-second cadence
+/body-double check-in   record a heartbeat
+/body-double stop end the body-double session
+/mvs N            suggest one minimum-viable step for item N
+/mvs commit       commit the suggested step and focus on it
+/survival on      enter survival mode
+/survival off     exit survival mode
+/survival         show survival-mode state
+```
+
+### Read-only Web dashboard
+
+`GET /dashboard` returns a `focus` block alongside the existing Now/Inbox/Tasks/Events/Week/Recent sections:
+
+```json
+{
+  "focus": {
+    "session": {
+      "id": 4,
+      "kind": "focus",
+      "target_type": "task",
+      "target_id": 7,
+      "status": "active",
+      "started_at": "...",
+      "ended_at": null,
+      "interval_seconds": null,
+      "note": null,
+      "last_check_in_at": null
+    },
+    "target": { "type": "task", "id": 7, "title": "open the document" },
+    "body_double": null,
+    "survival": false
+  }
+}
+```
+
+The web page at `http://127.0.0.1:8000/web` renders this as a Focus panel under Now, tags the header `Survival mode` when active, and never adds start/stop controls. Mutations stay API/TUI only.
+
+### Phase 6 configuration
+
+Placeholders only; never commit real values:
+
+```bash
+# .env (local only)
+BODY_DOUBLE_DEFAULT_INTERVAL=300
+BODY_DOUBLE_MIN_INTERVAL=60
+BODY_DOUBLE_MAX_INTERVAL=1800
+SURVIVAL_MAX_TASKS=1
+SURVIVAL_MAX_EVENTS=1
+```
+
+Phase 6 keeps helper suggestions deterministic and rules-only. Existing Phase 2 settings (`OPENROUTER_API_KEY`, `LLM_TIMEOUT_SECONDS`, `CLASSIFY_ENABLED`) still apply to the capture/classification pipeline.
+
+Reminder: ADHDman has no built-in authentication. Keep it bound to `127.0.0.1` and place it behind SSH tunneling, VPN, or another trusted access-control layer; do not expose it directly to the public internet.
+
 ## Development
 
 ```bash
