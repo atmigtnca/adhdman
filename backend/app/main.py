@@ -27,6 +27,7 @@ from app.repositories import (
     TaskNotFoundError,
     TaskNotOpenError,
     apply_classification_to_inbox_item,
+    apply_stuck_choice as apply_stuck_choice_repo,
     breakdown_task as breakdown_task_repo,
     capture_to_inbox,
     complete_task,
@@ -69,6 +70,10 @@ from app.schemas import (
     ResolveResultSchema,
     SearchRequest,
     SearchResponse,
+    StuckOption,
+    StuckOptionsResponse,
+    StuckRequest,
+    StuckResponse,
     TaskMutationResponse,
     TaskResponse,
     TaskUpdateRequest,
@@ -482,6 +487,55 @@ def focus_stop() -> FocusCurrentResponse:
 
     stop_focus_session_repo(settings)
     return FocusCurrentResponse(message=copy_strings.EMPTY_FOCUS)
+
+
+@app.get("/stuck/options", response_model=StuckOptionsResponse)
+def stuck_options(
+    target_type: str = "task", target_id: int | None = None
+) -> StuckOptionsResponse:
+    """Return the four block-reset choices with their non-shaming copy.
+
+    Read-only: never writes anything. ``target_type`` / ``target_id`` are
+    accepted for parity with ``POST /stuck`` and to let future targets surface
+    different choice sets, but the current slice only supports tasks and the
+    options list is identical regardless of target.
+    """
+
+    if target_type != "task":
+        raise HTTPException(
+            status_code=400,
+            detail="block reset only supports target_type='task'",
+        )
+    if target_id is not None:
+        try:
+            get_task_repo(target_id, settings)
+        except TaskNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    options = [
+        StuckOption(choice=choice, label=copy_strings.STUCK_OPTIONS[choice])
+        for choice in ("shrink", "swap", "skip", "park")
+    ]
+    return StuckOptionsResponse(
+        prompt=copy_strings.BLOCK_RESET_PROMPT, options=options
+    )
+
+
+@app.post("/stuck", response_model=StuckResponse)
+def stuck(request: StuckRequest) -> StuckResponse:
+    """Apply a block-reset choice to a task and log a reversible action."""
+
+    try:
+        task, action_id = apply_stuck_choice_repo(
+            request.target_type, request.target_id, request.choice, settings
+        )
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidUpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FocusTargetNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return StuckResponse(task=task, choice=request.choice, action_id=action_id)
 
 
 @app.post("/undo/latest", response_model=UndoResponse)

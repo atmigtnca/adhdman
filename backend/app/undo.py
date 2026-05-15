@@ -62,6 +62,7 @@ REVERSIBLE_TYPES: frozenset[str] = frozenset(
         "classify_event",
         "classify_inbox_fallback",
         "breakdown",
+        "block_reset",
     }
 )
 
@@ -105,7 +106,7 @@ def _row_snapshot_task(
     row = connection.execute(
         """
         SELECT id, title, status, source_inbox_item_id, due_at,
-               created_at, updated_at, completed_at, parent_task_id
+               created_at, updated_at, completed_at, parent_task_id, block_state
         FROM tasks WHERE id = ?
         """,
         (task_id,),
@@ -159,7 +160,7 @@ def _restore_task(
         """
         UPDATE tasks
         SET title = ?, status = ?, source_inbox_item_id = ?, due_at = ?,
-            created_at = ?, updated_at = ?, completed_at = ?
+            created_at = ?, updated_at = ?, completed_at = ?, block_state = ?
         WHERE id = ?
         """,
         (
@@ -170,6 +171,7 @@ def _restore_task(
             snapshot["created_at"],
             timestamp,
             snapshot.get("completed_at"),
+            snapshot.get("block_state"),
             snapshot["id"],
         ),
     )
@@ -351,6 +353,17 @@ def _check_no_conflict(
         # Pure log row: nothing to validate.
         return
 
+    if action_type == "block_reset":
+        assert after is not None, "block_reset action missing after_json"
+        task_after = after.get("task") if isinstance(after, dict) else None
+        current = _row_snapshot_task(connection, target_id)
+        if _row_diverged(current, task_after):
+            raise ActionConflictError(
+                f"task {target_id} has changed since block_reset "
+                f"action {action['id']} was recorded"
+            )
+        return
+
     if action_type == "breakdown":
         assert after is not None, "breakdown action missing after_json"
         for child_snapshot in after.get("children", []):
@@ -490,6 +503,14 @@ def _apply_inverse(
         # callers can still mark the action undone and keep the trail tidy.
         pre = _row_snapshot_inbox(connection, target_id)
         return {"inbox_item": pre}, {"inbox_item": pre}
+
+    if action_type == "block_reset":
+        assert before is not None, "block_reset action missing before_json"
+        task_before = before.get("task") if isinstance(before, dict) else None
+        assert task_before is not None, "block_reset before_json missing task"
+        pre = _row_snapshot_task(connection, target_id)
+        restored = _restore_task(connection, task_before, timestamp)
+        return {"task": restored}, {"task": pre}
 
     if action_type == "breakdown":
         assert after is not None, "breakdown action missing after_json"

@@ -1,6 +1,6 @@
 """Repository functions for ADHDman persistence operations."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import sqlite3
 
@@ -104,6 +104,7 @@ def _task_from_row(row: sqlite3.Row) -> TaskResponse:
         updated_at=row["updated_at"],
         completed_at=row["completed_at"],
         parent_task_id=row["parent_task_id"] if "parent_task_id" in keys else None,
+        block_state=row["block_state"] if "block_state" in keys else None,
     )
 
 
@@ -172,7 +173,7 @@ def list_tasks(status: str = "open", settings: Settings | None = None) -> list[T
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at, parent_task_id, block_state
             FROM tasks
             WHERE status = ?
             ORDER BY created_at ASC, id ASC
@@ -186,7 +187,11 @@ def list_tasks(status: str = "open", settings: Settings | None = None) -> list[T
 def get_today_summary(settings: Settings | None = None) -> TodayResponse:
     """Return counts and one oldest open item to focus on today."""
 
-    open_tasks = list_tasks(settings=settings)
+    open_tasks = [
+        task
+        for task in list_tasks(settings=settings)
+        if task.block_state != "parked"
+    ]
     open_inbox_items = list_inbox_items(settings=settings)
 
     one_thing: TodayOneThingResponse | None = None
@@ -511,7 +516,8 @@ def promote_inbox_item_to_task(
         )
         task_row = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at,
+                   created_at, updated_at, completed_at, parent_task_id, block_state
             FROM tasks
             WHERE id = ?
             """,
@@ -557,7 +563,8 @@ def complete_task_with_action(
         connection.execute("BEGIN IMMEDIATE")
         task_row = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at,
+                   created_at, updated_at, completed_at, parent_task_id, block_state
             FROM tasks
             WHERE id = ?
             """,
@@ -572,14 +579,15 @@ def complete_task_with_action(
         connection.execute(
             """
             UPDATE tasks
-            SET status = 'done', updated_at = ?, completed_at = ?
+            SET status = 'done', updated_at = ?, completed_at = ?, block_state = NULL
             WHERE id = ?
             """,
             (timestamp, timestamp, task_id),
         )
         updated_row = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at,
+                   created_at, updated_at, completed_at, parent_task_id, block_state
             FROM tasks
             WHERE id = ?
             """,
@@ -610,7 +618,7 @@ def complete_task(task_id: int, settings: Settings | None = None) -> TaskRespons
 
 _TASK_SELECT = (
     "SELECT id, title, status, source_inbox_item_id, due_at, "
-    "created_at, updated_at, completed_at, parent_task_id "
+    "created_at, updated_at, completed_at, parent_task_id, block_state "
     "FROM tasks WHERE id = ?"
 )
 
@@ -688,6 +696,8 @@ def update_task(
             if field in patch:
                 assignments.append(f"{field} = ?")
                 params.append(patch[field])
+        if patch.get("status") == "open":
+            assignments.append("block_state = NULL")
         assignments.append("updated_at = ?")
         params.append(timestamp)
         params.append(task_id)
@@ -1441,3 +1451,103 @@ def suggest_breakdown_steps(
     if max_steps is not None:
         steps = steps[: max(2, min(max_steps, 5))]
     return steps, "rules"
+
+
+# ----- Phase 6: block reset (stuck flow) -----
+
+
+STUCK_CHOICES: tuple[str, ...] = ("shrink", "swap", "skip", "park")
+
+
+def _bump_due_at_by_one_day(due_at: str | None) -> str | None:
+    """Return ``due_at`` pushed forward by one calendar day.
+
+    Leaves the value untouched (None or unparseable) when there is no usable
+    date so ``skip`` never invents a deadline that did not exist.
+    """
+
+    if not due_at:
+        return due_at
+    try:
+        parsed = datetime.fromisoformat(due_at)
+    except ValueError:
+        return due_at
+    return (parsed + timedelta(days=1)).isoformat()
+
+
+def apply_stuck_choice(
+    target_type: str,
+    target_id: int,
+    choice: str,
+    settings: Settings | None = None,
+) -> tuple[TaskResponse, int]:
+    """Apply a block-reset ``choice`` to a task and return ``(task, action_id)``.
+
+    Only ``target_type='task'`` is supported in this slice. The mutation writes
+    a single ``block_reset`` action whose ``before_json`` / ``after_json``
+    carry the full task row plus the chosen option so ``/undo`` can restore
+    pre-stuck state. The ``swap`` choice clears local block state only; changing
+    focus target remains an explicit `/focus` action so undo stays predictable.
+    """
+
+    if target_type != "task":
+        raise FocusTargetNotFoundError(
+            f"block reset only supports task targets, got '{target_type}'"
+        )
+    if choice not in STUCK_CHOICES:
+        raise InvalidUpdateError(
+            f"choice must be one of {STUCK_CHOICES}, got '{choice}'"
+        )
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(_TASK_SELECT, (target_id,)).fetchone()
+        if row is None or row["status"] == "deleted":
+            raise TaskNotFoundError(f"task {target_id} not found")
+
+        before = dict(row)
+
+        if choice == "shrink":
+            connection.execute(
+                "UPDATE tasks SET block_state = 'needs_breakdown', updated_at = ? WHERE id = ?",
+                (timestamp, target_id),
+            )
+        elif choice == "park":
+            connection.execute(
+                "UPDATE tasks SET block_state = 'parked', updated_at = ? WHERE id = ?",
+                (timestamp, target_id),
+            )
+        elif choice == "skip":
+            new_due = _bump_due_at_by_one_day(before["due_at"])
+            connection.execute(
+                "UPDATE tasks SET due_at = ?, updated_at = ? WHERE id = ?",
+                (new_due, timestamp, target_id),
+            )
+        elif choice == "swap":
+            connection.execute(
+                "UPDATE tasks SET block_state = NULL, updated_at = ? WHERE id = ?",
+                (timestamp, target_id),
+            )
+
+        updated_row = connection.execute(_TASK_SELECT, (target_id,)).fetchone()
+        assert updated_row is not None
+        task = _task_from_row(updated_row)
+        after = dict(updated_row)
+        action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('block_reset', 'task', ?, ?, ?, ?)
+            """,
+            (
+                target_id,
+                json.dumps({"task": before, "choice": choice}),
+                json.dumps({"task": after, "choice": choice}),
+                timestamp,
+            ),
+        )
+        action_id = action_cursor.lastrowid
+
+    return task, action_id

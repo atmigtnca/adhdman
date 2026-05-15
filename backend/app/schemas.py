@@ -109,6 +109,7 @@ class TaskResponse(BaseModel):
     updated_at: str
     completed_at: str | None
     parent_task_id: int | None = None
+    block_state: str | None = None
 
 
 class TaskUpdateRequest(BaseModel):
