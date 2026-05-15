@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class CaptureRequest(BaseModel):
@@ -338,3 +338,236 @@ class DashboardResponse(BaseModel):
     events: list[EventResponse]
     week: list[WeekDay]
     recent_actions: list[RecentActionResponse]
+
+
+# ----- Phase 6: execution helpers -----
+
+
+FocusKind = Literal["focus", "body_double", "survival"]
+FocusTargetType = Literal["task", "event", "inbox_item"]
+FocusStatus = Literal["active", "ended", "cancelled"]
+
+
+class FocusSessionResponse(BaseModel):
+    """Response schema for a row from the ``focus_sessions`` table."""
+
+    id: int
+    kind: FocusKind
+    target_type: FocusTargetType | None = None
+    target_id: int | None = None
+    status: FocusStatus
+    started_at: str
+    ended_at: str | None = None
+    interval_seconds: int | None = None
+    note: str | None = None
+    last_check_in_at: str | None = None
+
+
+class FocusTarget(BaseModel):
+    """Resolved focus target for read endpoints."""
+
+    type: FocusTargetType
+    id: int
+    title: str
+
+
+class FocusStartRequest(BaseModel):
+    """Request body for POST /focus/start."""
+
+    target_type: FocusTargetType
+    target_id: int = Field(ge=1)
+    note: str | None = Field(default=None, max_length=500)
+    replace: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
+class FocusCurrentResponse(BaseModel):
+    """Read-only response describing the current focus session (if any)."""
+
+    session: FocusSessionResponse | None = None
+    target: FocusTarget | None = None
+    message: str
+
+
+class FocusConflictResponse(BaseModel):
+    """Calm structured payload returned when a focus session already exists."""
+
+    message: str
+    existing: FocusSessionResponse
+
+
+class BreakdownRequest(BaseModel):
+    """Request body for POST /tasks/{id}/breakdown."""
+
+    steps: list[str] = Field(min_length=2, max_length=5)
+    source: Literal["manual", "llm"] = "manual"
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("steps")
+    @classmethod
+    def _normalize_steps(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for step in value:
+            text = step.strip()
+            if not text:
+                raise ValueError("step text must not be empty")
+            if len(text) > 500:
+                raise ValueError("step text must be at most 500 characters")
+            normalized.append(text)
+        return normalized
+
+
+class BreakdownResponse(BaseModel):
+    """Response for POST /tasks/{id}/breakdown."""
+
+    parent: TaskResponse
+    children: list[TaskResponse]
+    action_id: int
+
+
+class BreakdownSuggestRequest(BaseModel):
+    """Optional knobs for POST /tasks/{id}/breakdown/suggest."""
+
+    max_steps: int | None = Field(default=None, ge=2, le=5)
+
+    model_config = {"extra": "forbid"}
+
+
+class BreakdownSuggestResponse(BaseModel):
+    """Read-only suggestions for a breakdown step list."""
+
+    steps: list[str]
+    source: Literal["rules", "llm"]
+    prompt: str
+
+
+StuckChoice = Literal["shrink", "swap", "skip", "park"]
+
+
+class StuckRequest(BaseModel):
+    """Request body for POST /stuck."""
+
+    target_type: Literal["task"]
+    target_id: int = Field(ge=1)
+    choice: StuckChoice
+
+    model_config = {"extra": "forbid"}
+
+
+class StuckOption(BaseModel):
+    """A single stuck-flow choice with its copy string."""
+
+    choice: StuckChoice
+    label: str
+
+
+class StuckOptionsResponse(BaseModel):
+    """Read-only listing of the four stuck-flow choices."""
+
+    prompt: str
+    options: list[StuckOption]
+
+
+class StuckResponse(BaseModel):
+    """Response for POST /stuck after applying a choice."""
+
+    task: TaskResponse
+    choice: StuckChoice
+    action_id: int
+
+
+class BodyDoubleStartRequest(BaseModel):
+    """Request body for POST /body-double/start."""
+
+    interval_seconds: int = Field(ge=1)
+    note: str | None = Field(default=None, max_length=500)
+    target_type: FocusTargetType | None = None
+    target_id: int | None = Field(default=None, ge=1)
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _target_fields_are_paired(self) -> "BodyDoubleStartRequest":
+        has_type = self.target_type is not None
+        has_id = self.target_id is not None
+        if has_type != has_id:
+            raise ValueError("target_type and target_id must be provided together")
+        return self
+
+
+class BodyDoubleCheckInResponse(BaseModel):
+    """Response for POST /body-double/check-in."""
+
+    session: FocusSessionResponse
+    message: str
+
+
+class MVSSuggestRequest(BaseModel):
+    """Request body for POST /mvs/suggest."""
+
+    target_type: Literal["task", "inbox_item"]
+    target_id: int = Field(ge=1)
+
+    model_config = {"extra": "forbid"}
+
+
+class MVSSuggestResponse(BaseModel):
+    """Read-only minimum-viable-step suggestion."""
+
+    step: str
+    source: Literal["rules", "llm"]
+    prompt: str
+
+
+class MVSCommitRequest(BaseModel):
+    """Request body for POST /mvs/commit."""
+
+    target_type: Literal["task", "inbox_item"]
+    target_id: int = Field(ge=1)
+    step: str = Field(min_length=1, max_length=500)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("step")
+    @classmethod
+    def _normalize_step(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("step must not be empty")
+        return text
+
+
+class MVSCommitResponse(BaseModel):
+    """Response for POST /mvs/commit: created child task and focus session."""
+
+    task: TaskResponse
+    focus: FocusSessionResponse
+    task_action_id: int
+    focus_action_id: int
+
+
+class SurvivalToggleRequest(BaseModel):
+    """Request body for POST /survival/enter and /survival/exit."""
+
+    note: str | None = Field(default=None, max_length=500)
+
+    model_config = {"extra": "forbid"}
+
+
+class SurvivalStateResponse(BaseModel):
+    """Read-only response describing whether survival mode is on."""
+
+    active: bool
+    session: FocusSessionResponse | None = None
+    message: str
+
+
+class FocusPanelResponse(BaseModel):
+    """Combined Focus panel block for the dashboard payload."""
+
+    session: FocusSessionResponse | None = None
+    target: FocusTarget | None = None
+    body_double: FocusSessionResponse | None = None
+    survival: bool

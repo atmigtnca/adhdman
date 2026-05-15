@@ -65,6 +65,20 @@ SCHEMA_STATEMENTS = (
       created_at TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS focus_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      target_type TEXT,
+      target_id INTEGER,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      interval_seconds INTEGER,
+      note TEXT,
+      last_check_in_at TEXT
+    );
+    """,
 )
 
 
@@ -103,13 +117,23 @@ PHASE_3_ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+PHASE_6_ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    (
+        "tasks",
+        "parent_task_id",
+        "ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)",
+    ),
+    ("tasks", "block_state", "ALTER TABLE tasks ADD COLUMN block_state TEXT"),
+)
+
+
 def _existing_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
     return {row[1] for row in rows}
 
 
 def _apply_additive_columns(connection: sqlite3.Connection) -> None:
-    for table, column, statement in PHASE_3_ADDITIVE_COLUMNS:
+    for table, column, statement in PHASE_3_ADDITIVE_COLUMNS + PHASE_6_ADDITIVE_COLUMNS:
         if column not in _existing_columns(connection, table):
             connection.execute(statement)
 
