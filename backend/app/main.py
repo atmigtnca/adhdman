@@ -10,8 +10,12 @@ from app.db import init_db
 from app.repositories import (
     InboxItemNotFoundError,
     InboxItemNotOpenError,
+    TaskNotFoundError,
+    TaskNotOpenError,
     capture_to_inbox,
+    complete_task,
     list_inbox_items,
+    list_tasks,
     promote_inbox_item_to_task,
 )
 from app.schemas import CaptureRequest, InboxItemResponse, TaskResponse
@@ -60,4 +64,23 @@ def promote_inbox_item(inbox_item_id: int) -> TaskResponse:
     except InboxItemNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except InboxItemNotOpenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/tasks", response_model=list[TaskResponse])
+def get_tasks() -> list[TaskResponse]:
+    """List open tasks oldest first."""
+
+    return list_tasks(settings=settings)
+
+
+@app.post("/tasks/{task_id}/done", response_model=TaskResponse)
+def mark_task_done(task_id: int) -> TaskResponse:
+    """Mark an open task as done."""
+
+    try:
+        return complete_task(task_id, settings)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TaskNotOpenError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

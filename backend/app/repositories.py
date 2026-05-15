@@ -17,6 +17,14 @@ class InboxItemNotOpenError(Exception):
     """Raised when an inbox item cannot be promoted because it is not open."""
 
 
+class TaskNotFoundError(Exception):
+    """Raised when a task does not exist."""
+
+
+class TaskNotOpenError(Exception):
+    """Raised when a task cannot be completed because it is not open."""
+
+
 def _now_iso() -> str:
     """Return a UTC timestamp as an ISO-8601 string."""
 
@@ -67,6 +75,24 @@ def list_inbox_items(
         ).fetchall()
 
     return [_inbox_item_from_row(row) for row in rows]
+
+
+def list_tasks(status: str = "open", settings: Settings | None = None) -> list[TaskResponse]:
+    """Return tasks with the requested status, ordered oldest first."""
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, title, status, source_inbox_item_id, created_at, updated_at, completed_at
+            FROM tasks
+            WHERE status = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (status,),
+        ).fetchall()
+
+    return [_task_from_row(row) for row in rows]
 
 
 def capture_to_inbox(text: str, settings: Settings | None = None) -> InboxItemResponse:
@@ -185,6 +211,60 @@ def promote_inbox_item_to_task(
             VALUES ('promote_task', 'task', ?, ?, ?, ?)
             """,
             (task.id, json.dumps(before_inbox), json.dumps(after_payload), timestamp),
+        )
+
+    return task
+
+
+def complete_task(task_id: int, settings: Settings | None = None) -> TaskResponse:
+    """Mark an open task as done, set completion time, and log the action."""
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        # Acquire the write lock before reading so concurrent completions cannot
+        # both observe the task as open and create duplicate completion actions.
+        connection.execute("BEGIN IMMEDIATE")
+        task_row = connection.execute(
+            """
+            SELECT id, title, status, source_inbox_item_id, created_at, updated_at, completed_at
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if task_row is None:
+            raise TaskNotFoundError(f"task {task_id} not found")
+        if task_row["status"] != "open":
+            raise TaskNotOpenError(f"task {task_id} is not open")
+
+        before_task = dict(task_row)
+        connection.execute(
+            """
+            UPDATE tasks
+            SET status = 'done', updated_at = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (timestamp, timestamp, task_id),
+        )
+        updated_row = connection.execute(
+            """
+            SELECT id, title, status, source_inbox_item_id, created_at, updated_at, completed_at
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if updated_row is None:
+            raise RuntimeError("failed to load completed task")
+
+        task = _task_from_row(updated_row)
+        connection.execute(
+            """
+            INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('complete_task', 'task', ?, ?, ?, ?)
+            """,
+            (task.id, json.dumps(before_task), json.dumps(task.model_dump()), timestamp),
         )
 
     return task
