@@ -14,29 +14,41 @@ from app.resolver import InvalidTimezoneError, resolve as resolve_datetime
 from app.llm.base import LLMProvider
 from app.llm.openrouter import OpenRouterProvider
 from app.repositories import (
+    EventNotFoundError,
     InboxItemNotFoundError,
     InboxItemNotOpenError,
+    InvalidUpdateError,
     TaskNotFoundError,
     TaskNotOpenError,
     apply_classification_to_inbox_item,
     capture_to_inbox,
     complete_task,
+    delete_event as delete_event_repo,
+    delete_task as delete_task_repo,
+    get_event as get_event_repo,
+    get_task as get_task_repo,
     get_today_summary,
     list_events,
     list_inbox_items,
     list_tasks,
     promote_inbox_item_to_task,
+    update_event as update_event_repo,
+    update_task as update_task_repo,
 )
 from app.schemas import (
     CaptureRequest,
     CaptureResponse,
     ClassifyResponse,
+    EventMutationResponse,
     EventResponse,
+    EventUpdateRequest,
     InboxItemResponse,
     ResolveRequest,
     ResolveResponse,
     ResolveResultSchema,
+    TaskMutationResponse,
     TaskResponse,
+    TaskUpdateRequest,
     TodayResponse,
 )
 
@@ -216,8 +228,81 @@ def mark_task_done(task_id: int) -> TaskResponse:
     """Mark an open task as done."""
 
     try:
-        return complete_task(task_id, settings)
+        task = complete_task(task_id, settings)
     except TaskNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except TaskNotOpenError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return task
+
+
+@app.get("/tasks/{task_id}", response_model=TaskResponse)
+def get_task(task_id: int) -> TaskResponse:
+    """Return a single task by id (includes soft-deleted rows)."""
+
+    try:
+        return get_task_repo(task_id, settings)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/tasks/{task_id}", response_model=TaskMutationResponse)
+def patch_task(task_id: int, request: TaskUpdateRequest) -> TaskMutationResponse:
+    """Update a task's title, status, or due_at and log a snapshot."""
+
+    patch = request.model_dump(exclude_unset=True)
+    try:
+        task, action_id = update_task_repo(task_id, patch, settings)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TaskNotOpenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InvalidUpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TaskMutationResponse(task=task, action_id=action_id)
+
+
+@app.delete("/tasks/{task_id}", response_model=TaskMutationResponse)
+def soft_delete_task(task_id: int) -> TaskMutationResponse:
+    """Soft-delete a task by setting ``status='deleted'``; row remains readable."""
+
+    try:
+        task, action_id = delete_task_repo(task_id, settings)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskMutationResponse(task=task, action_id=action_id)
+
+
+@app.get("/events/{event_id}", response_model=EventResponse)
+def get_event(event_id: int) -> EventResponse:
+    """Return a single event by id (includes soft-deleted rows)."""
+
+    try:
+        return get_event_repo(event_id, settings)
+    except EventNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/events/{event_id}", response_model=EventMutationResponse)
+def patch_event(event_id: int, request: EventUpdateRequest) -> EventMutationResponse:
+    """Update an event's title, starts_at, or ends_at and log a snapshot."""
+
+    patch = request.model_dump(exclude_unset=True)
+    try:
+        event, action_id = update_event_repo(event_id, patch, settings)
+    except EventNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidUpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EventMutationResponse(event=event, action_id=action_id)
+
+
+@app.delete("/events/{event_id}", response_model=EventMutationResponse)
+def soft_delete_event(event_id: int) -> EventMutationResponse:
+    """Soft-delete an event by setting ``status='deleted'``; row remains readable."""
+
+    try:
+        event, action_id = delete_event_repo(event_id, settings)
+    except EventNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return EventMutationResponse(event=event, action_id=action_id)

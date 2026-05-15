@@ -92,6 +92,7 @@ class EventResponse(BaseModel):
     starts_at: str | None
     ends_at: str | None
     source_inbox_item_id: int | None
+    status: str = "open"
     created_at: str
     updated_at: str
 
@@ -103,9 +104,72 @@ class TaskResponse(BaseModel):
     title: str
     status: str
     source_inbox_item_id: int | None
+    due_at: str | None = None
     created_at: str
     updated_at: str
     completed_at: str | None
+
+
+class TaskUpdateRequest(BaseModel):
+    """Request body for PATCH /tasks/{id}.
+
+    All fields are optional; at least one must be provided. Unknown fields are
+    rejected so callers cannot silently mutate columns outside the patch surface.
+    """
+
+    title: str | None = None
+    status: Literal["open", "done", "cancelled"] | None = None
+    due_at: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("title")
+    @classmethod
+    def _normalize_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("title must not be empty")
+        return normalized
+
+
+class EventUpdateRequest(BaseModel):
+    """Request body for PATCH /events/{id}.
+
+    All fields are optional; at least one must be provided. Unknown fields are
+    rejected.
+    """
+
+    title: str | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("title")
+    @classmethod
+    def _normalize_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("title must not be empty")
+        return normalized
+
+
+class TaskMutationResponse(BaseModel):
+    """Response for PATCH/DELETE on a task: the post-mutation row + action id."""
+
+    task: TaskResponse
+    action_id: int
+
+
+class EventMutationResponse(BaseModel):
+    """Response for PATCH/DELETE on an event: the post-mutation row + action id."""
+
+    event: EventResponse
+    action_id: int
 
 
 class ResolveRequest(BaseModel):

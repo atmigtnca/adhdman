@@ -35,6 +35,14 @@ class TaskNotOpenError(Exception):
     """Raised when a task cannot be completed because it is not open."""
 
 
+class EventNotFoundError(Exception):
+    """Raised when an event does not exist."""
+
+
+class InvalidUpdateError(Exception):
+    """Raised when a patch payload is empty or otherwise invalid."""
+
+
 def _now_iso() -> str:
     """Return a UTC timestamp as an ISO-8601 string."""
 
@@ -56,14 +64,32 @@ def _inbox_item_from_row(row: sqlite3.Row) -> InboxItemResponse:
 def _task_from_row(row: sqlite3.Row) -> TaskResponse:
     """Convert a SQLite row into a task response model."""
 
+    keys = row.keys()
     return TaskResponse(
         id=row["id"],
         title=row["title"],
         status=row["status"],
         source_inbox_item_id=row["source_inbox_item_id"],
+        due_at=row["due_at"] if "due_at" in keys else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         completed_at=row["completed_at"],
+    )
+
+
+def _event_from_row(row: sqlite3.Row) -> EventResponse:
+    """Convert a SQLite row into an event response model."""
+
+    keys = row.keys()
+    return EventResponse(
+        id=row["id"],
+        title=row["title"],
+        starts_at=row["starts_at"],
+        ends_at=row["ends_at"],
+        source_inbox_item_id=row["source_inbox_item_id"],
+        status=row["status"] if "status" in keys else "open",
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -99,24 +125,14 @@ def list_events(settings: Settings | None = None) -> list[EventResponse]:
         rows = connection.execute(
             """
             SELECT id, title, starts_at, ends_at, source_inbox_item_id,
-                   created_at, updated_at
+                   status, created_at, updated_at
             FROM events
+            WHERE status != 'deleted'
             ORDER BY (starts_at IS NULL), starts_at ASC, id ASC
             """,
         ).fetchall()
 
-    return [
-        EventResponse(
-            id=row["id"],
-            title=row["title"],
-            starts_at=row["starts_at"],
-            ends_at=row["ends_at"],
-            source_inbox_item_id=row["source_inbox_item_id"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
-        for row in rows
-    ]
+    return [_event_from_row(row) for row in rows]
 
 
 def list_tasks(status: str = "open", settings: Settings | None = None) -> list[TaskResponse]:
@@ -126,7 +142,7 @@ def list_tasks(status: str = "open", settings: Settings | None = None) -> list[T
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
             FROM tasks
             WHERE status = ?
             ORDER BY created_at ASC, id ASC
@@ -465,7 +481,7 @@ def promote_inbox_item_to_task(
         )
         task_row = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
             FROM tasks
             WHERE id = ?
             """,
@@ -498,7 +514,9 @@ def promote_inbox_item_to_task(
     return task
 
 
-def complete_task(task_id: int, settings: Settings | None = None) -> TaskResponse:
+def complete_task_with_action(
+    task_id: int, settings: Settings | None = None
+) -> tuple[TaskResponse, int]:
     """Mark an open task as done, set completion time, and log the action."""
 
     timestamp = _now_iso()
@@ -509,7 +527,7 @@ def complete_task(task_id: int, settings: Settings | None = None) -> TaskRespons
         connection.execute("BEGIN IMMEDIATE")
         task_row = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
             FROM tasks
             WHERE id = ?
             """,
@@ -531,7 +549,7 @@ def complete_task(task_id: int, settings: Settings | None = None) -> TaskRespons
         )
         updated_row = connection.execute(
             """
-            SELECT id, title, status, source_inbox_item_id, created_at, updated_at, completed_at
+            SELECT id, title, status, source_inbox_item_id, due_at, created_at, updated_at, completed_at
             FROM tasks
             WHERE id = ?
             """,
@@ -541,12 +559,268 @@ def complete_task(task_id: int, settings: Settings | None = None) -> TaskRespons
             raise RuntimeError("failed to load completed task")
 
         task = _task_from_row(updated_row)
-        connection.execute(
+        cursor = connection.execute(
             """
             INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
             VALUES ('complete_task', 'task', ?, ?, ?, ?)
             """,
             (task.id, json.dumps(before_task), json.dumps(task.model_dump()), timestamp),
         )
+        action_id = cursor.lastrowid
 
+    return task, action_id
+
+
+def complete_task(task_id: int, settings: Settings | None = None) -> TaskResponse:
+    """Backward-compatible wrapper returning only the completed task."""
+
+    task, _ = complete_task_with_action(task_id, settings)
     return task
+
+
+_TASK_SELECT = (
+    "SELECT id, title, status, source_inbox_item_id, due_at, "
+    "created_at, updated_at, completed_at FROM tasks WHERE id = ?"
+)
+
+_EVENT_SELECT = (
+    "SELECT id, title, starts_at, ends_at, source_inbox_item_id, status, "
+    "created_at, updated_at FROM events WHERE id = ?"
+)
+
+
+def get_task(task_id: int, settings: Settings | None = None) -> TaskResponse:
+    """Return a task by id, including soft-deleted rows."""
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(_TASK_SELECT, (task_id,)).fetchone()
+    if row is None:
+        raise TaskNotFoundError(f"task {task_id} not found")
+    return _task_from_row(row)
+
+
+def get_event(event_id: int, settings: Settings | None = None) -> EventResponse:
+    """Return an event by id, including soft-deleted rows."""
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(_EVENT_SELECT, (event_id,)).fetchone()
+    if row is None:
+        raise EventNotFoundError(f"event {event_id} not found")
+    return _event_from_row(row)
+
+
+_TASK_PATCH_FIELDS = ("title", "status", "due_at")
+
+
+def update_task(
+    task_id: int, patch: dict, settings: Settings | None = None
+) -> tuple[TaskResponse, int]:
+    """Apply a partial update to a task and log a full before/after snapshot.
+
+    ``patch`` only contains keys the caller explicitly provided. Soft-deleted
+    tasks cannot be updated; restore them through undo first.
+    """
+
+    unknown = set(patch) - set(_TASK_PATCH_FIELDS)
+    if unknown:
+        raise InvalidUpdateError(f"unknown task fields: {sorted(unknown)}")
+    if not patch:
+        raise InvalidUpdateError("at least one field is required")
+
+    # Status->done is the existing Phase 1 completion: route through complete_task
+    # so completed_at is set and we log a single complete_task action instead of a
+    # duplicate update_task. Mixing other fields with status='done' is rejected to
+    # keep the action log unambiguous; send those edits in a separate request.
+    if patch.get("status") == "done":
+        if set(patch) != {"status"}:
+            raise InvalidUpdateError(
+                "status='done' must be sent on its own; update other fields first"
+            )
+        return complete_task_with_action(task_id, settings)
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(_TASK_SELECT, (task_id,)).fetchone()
+        if row is None:
+            raise TaskNotFoundError(f"task {task_id} not found")
+        if row["status"] == "deleted":
+            raise TaskNotFoundError(f"task {task_id} not found")
+
+        before = dict(row)
+        assignments: list[str] = []
+        params: list[object] = []
+        for field in _TASK_PATCH_FIELDS:
+            if field in patch:
+                assignments.append(f"{field} = ?")
+                params.append(patch[field])
+        assignments.append("updated_at = ?")
+        params.append(timestamp)
+        params.append(task_id)
+        connection.execute(
+            f"UPDATE tasks SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
+        updated_row = connection.execute(_TASK_SELECT, (task_id,)).fetchone()
+        if updated_row is None:
+            raise RuntimeError("failed to reload task after update")
+        task = _task_from_row(updated_row)
+        cursor = connection.execute(
+            """
+            INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('update_task', 'task', ?, ?, ?, ?)
+            """,
+            (
+                task.id,
+                json.dumps(before),
+                json.dumps(dict(updated_row)),
+                timestamp,
+            ),
+        )
+        action_id = cursor.lastrowid
+
+    return task, action_id
+
+
+def delete_task(
+    task_id: int, settings: Settings | None = None
+) -> tuple[TaskResponse, int]:
+    """Soft-delete a task by setting ``status='deleted'`` and log the snapshot."""
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(_TASK_SELECT, (task_id,)).fetchone()
+        if row is None:
+            raise TaskNotFoundError(f"task {task_id} not found")
+        if row["status"] == "deleted":
+            raise TaskNotFoundError(f"task {task_id} not found")
+
+        before = dict(row)
+        connection.execute(
+            "UPDATE tasks SET status = 'deleted', updated_at = ? WHERE id = ?",
+            (timestamp, task_id),
+        )
+        updated_row = connection.execute(_TASK_SELECT, (task_id,)).fetchone()
+        if updated_row is None:
+            raise RuntimeError("failed to reload task after delete")
+        task = _task_from_row(updated_row)
+        cursor = connection.execute(
+            """
+            INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('delete_task', 'task', ?, ?, ?, ?)
+            """,
+            (
+                task.id,
+                json.dumps(before),
+                json.dumps(dict(updated_row)),
+                timestamp,
+            ),
+        )
+        action_id = cursor.lastrowid
+
+    return task, action_id
+
+
+_EVENT_PATCH_FIELDS = ("title", "starts_at", "ends_at")
+
+
+def update_event(
+    event_id: int, patch: dict, settings: Settings | None = None
+) -> tuple[EventResponse, int]:
+    """Apply a partial update to an event and log a full before/after snapshot."""
+
+    unknown = set(patch) - set(_EVENT_PATCH_FIELDS)
+    if unknown:
+        raise InvalidUpdateError(f"unknown event fields: {sorted(unknown)}")
+    if not patch:
+        raise InvalidUpdateError("at least one field is required")
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(_EVENT_SELECT, (event_id,)).fetchone()
+        if row is None:
+            raise EventNotFoundError(f"event {event_id} not found")
+        if row["status"] == "deleted":
+            raise EventNotFoundError(f"event {event_id} not found")
+
+        before = dict(row)
+        assignments: list[str] = []
+        params: list[object] = []
+        for field in _EVENT_PATCH_FIELDS:
+            if field in patch:
+                assignments.append(f"{field} = ?")
+                params.append(patch[field])
+        assignments.append("updated_at = ?")
+        params.append(timestamp)
+        params.append(event_id)
+        connection.execute(
+            f"UPDATE events SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
+        updated_row = connection.execute(_EVENT_SELECT, (event_id,)).fetchone()
+        if updated_row is None:
+            raise RuntimeError("failed to reload event after update")
+        event = _event_from_row(updated_row)
+        cursor = connection.execute(
+            """
+            INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('update_event', 'event', ?, ?, ?, ?)
+            """,
+            (
+                event.id,
+                json.dumps(before),
+                json.dumps(dict(updated_row)),
+                timestamp,
+            ),
+        )
+        action_id = cursor.lastrowid
+
+    return event, action_id
+
+
+def delete_event(
+    event_id: int, settings: Settings | None = None
+) -> tuple[EventResponse, int]:
+    """Soft-delete an event by setting ``status='deleted'`` and log the snapshot."""
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(_EVENT_SELECT, (event_id,)).fetchone()
+        if row is None:
+            raise EventNotFoundError(f"event {event_id} not found")
+        if row["status"] == "deleted":
+            raise EventNotFoundError(f"event {event_id} not found")
+
+        before = dict(row)
+        connection.execute(
+            "UPDATE events SET status = 'deleted', updated_at = ? WHERE id = ?",
+            (timestamp, event_id),
+        )
+        updated_row = connection.execute(_EVENT_SELECT, (event_id,)).fetchone()
+        if updated_row is None:
+            raise RuntimeError("failed to reload event after delete")
+        event = _event_from_row(updated_row)
+        cursor = connection.execute(
+            """
+            INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('delete_event', 'event', ?, ?, ?, ?)
+            """,
+            (
+                event.id,
+                json.dumps(before),
+                json.dumps(dict(updated_row)),
+                timestamp,
+            ),
+        )
+        action_id = cursor.lastrowid
+
+    return event, action_id
