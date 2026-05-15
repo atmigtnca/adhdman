@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local data
+/data/*
+!/data/.gitkeep
+*.sqlite
+*.sqlite3
+
+# Tool state
+.hermes/
+.omx/
+.claude/settings.local.json
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

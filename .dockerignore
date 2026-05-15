@@ -1,0 +1,29 @@
+# VCS and local tool state
+.git
+.omx
+.claude
+.hermes
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python caches / virtualenvs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local data and databases
+data/
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
