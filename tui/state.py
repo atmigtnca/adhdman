@@ -29,11 +29,35 @@ class Listing:
 
 
 @dataclass
+class PendingBreakdown:
+    """Cached `/breakdown N` suggestion awaiting `/breakdown commit`."""
+
+    task_id: int
+    task_title: str
+    steps: list[str]
+    source: str  # "rules" | "llm"
+
+
+@dataclass
+class PendingMVS:
+    """Cached `/mvs N` suggestion awaiting `/mvs commit`."""
+
+    target_type: str  # "task" | "inbox_item"
+    target_id: int
+    target_title: str
+    step: str
+    source: str  # "rules" | "llm"
+
+
+@dataclass
 class AppState:
     today: dict[str, Any] | None = None
     last_listing: Listing | None = None
     last_selection: ListingItem | None = None
     history: list[str] = field(default_factory=list)  # input lines, in-memory only
+    pending_breakdown: PendingBreakdown | None = None
+    pending_mvs: PendingMVS | None = None
+    survival_active: bool = False
 
     def set_listing(self, listing: Listing) -> None:
         self.last_listing = listing
@@ -44,6 +68,26 @@ class AppState:
     def push_history(self, line: str) -> None:
         if line:
             self.history.append(line)
+
+    def resolve_listing_target(
+        self,
+        index: int,
+        allowed_kinds: tuple[str, ...] | None = None,
+    ) -> ListingItem | None:
+        """Resolve a 1-based index in the most recent listing, regardless of kind.
+
+        If ``allowed_kinds`` is given, only items whose ``kind`` is in the
+        set are returned; non-matching rows yield ``None`` so callers can
+        emit a calm message rather than mutating an unsupported target.
+        """
+        if self.last_listing is None:
+            return None
+        item = self.last_listing.resolve(index)
+        if item is None:
+            return None
+        if allowed_kinds is not None and item.kind not in allowed_kinds:
+            return None
+        return item
 
     def resolve_task_target(self, index: int | None) -> ListingItem | None:
         """Resolve a /done-style target.

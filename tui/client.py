@@ -124,6 +124,114 @@ class TuiClient:
             payload["tz"] = tz
         return self._request("POST", "/resolve", json=payload)
 
+    # Phase 6 — execution helpers -----------------------------------
+    def focus_current(self) -> Any:
+        return self._request("GET", "/focus/current")
+
+    def focus_start(
+        self,
+        target_type: str,
+        target_id: int,
+        *,
+        note: str | None = None,
+        replace: bool = False,
+    ) -> Any:
+        payload: dict[str, Any] = {
+            "target_type": target_type,
+            "target_id": int(target_id),
+            "replace": bool(replace),
+        }
+        if note is not None:
+            payload["note"] = note
+        return self._request("POST", "/focus/start", json=payload)
+
+    def focus_stop(self) -> Any:
+        return self._request("POST", "/focus/stop")
+
+    def breakdown_suggest(self, task_id: int) -> Any:
+        return self._request(
+            "POST", f"/tasks/{int(task_id)}/breakdown/suggest", json={}
+        )
+
+    def breakdown_commit(
+        self, task_id: int, steps: list[str], *, source: str = "manual"
+    ) -> Any:
+        payload = {"steps": list(steps), "source": source}
+        return self._request(
+            "POST", f"/tasks/{int(task_id)}/breakdown", json=payload
+        )
+
+    def stuck_options(
+        self,
+        target_type: str = "task",
+        target_id: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {"target_type": target_type}
+        if target_id is not None:
+            params["target_id"] = int(target_id)
+        return self._request("GET", "/stuck/options", params=params)
+
+    def stuck_apply(self, target_type: str, target_id: int, choice: str) -> Any:
+        payload = {
+            "target_type": target_type,
+            "target_id": int(target_id),
+            "choice": choice,
+        }
+        return self._request("POST", "/stuck", json=payload)
+
+    def body_double_current(self) -> Any:
+        return self._request("GET", "/body-double/current")
+
+    def body_double_start(
+        self,
+        interval_seconds: int | None = None,
+        *,
+        note: str | None = None,
+        target_type: str | None = None,
+        target_id: int | None = None,
+        replace: bool = False,
+    ) -> Any:
+        payload: dict[str, Any] = {"replace": bool(replace)}
+        if interval_seconds is not None:
+            payload["interval_seconds"] = int(interval_seconds)
+        if note is not None:
+            payload["note"] = note
+        if target_type is not None:
+            payload["target_type"] = target_type
+        if target_id is not None:
+            payload["target_id"] = int(target_id)
+        return self._request("POST", "/body-double/start", json=payload)
+
+    def body_double_check_in(self) -> Any:
+        return self._request("POST", "/body-double/check-in")
+
+    def body_double_stop(self) -> Any:
+        return self._request("POST", "/body-double/stop")
+
+    def mvs_suggest(self, target_type: str, target_id: int) -> Any:
+        payload = {"target_type": target_type, "target_id": int(target_id)}
+        return self._request("POST", "/mvs/suggest", json=payload)
+
+    def mvs_commit(self, target_type: str, target_id: int, step: str) -> Any:
+        payload = {
+            "target_type": target_type,
+            "target_id": int(target_id),
+            "step": step,
+        }
+        return self._request("POST", "/mvs/commit", json=payload)
+
+    def survival_state(self) -> Any:
+        return self._request("GET", "/survival")
+
+    def survival_enter(self, note: str | None = None) -> Any:
+        payload: dict[str, Any] = {}
+        if note is not None:
+            payload["note"] = note
+        return self._request("POST", "/survival/enter", json=payload)
+
+    def survival_exit(self) -> Any:
+        return self._request("POST", "/survival/exit", json={})
+
 
 def _extract_message(resp: httpx.Response) -> str:
     try:
