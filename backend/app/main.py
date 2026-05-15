@@ -38,9 +38,12 @@ from app.repositories import (
     delete_task as delete_task_repo,
     get_active_body_double_with_target,
     get_active_focus_with_target,
+    enter_survival_mode,
+    exit_survival_mode,
     get_dashboard,
     get_event as get_event_repo,
     get_task as get_task_repo,
+    get_survival_state,
     get_today_summary,
     list_events,
     list_inbox_items,
@@ -90,6 +93,8 @@ from app.schemas import (
     StuckOptionsResponse,
     StuckRequest,
     StuckResponse,
+    SurvivalStateResponse,
+    SurvivalToggleRequest,
     TaskMutationResponse,
     TaskResponse,
     TaskUpdateRequest,
@@ -638,6 +643,41 @@ def stuck(request: StuckRequest) -> StuckResponse:
     except FocusTargetNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return StuckResponse(task=task, choice=request.choice, action_id=action_id)
+
+
+@app.get("/survival", response_model=SurvivalStateResponse)
+def survival_state() -> SurvivalStateResponse:
+    """Return current survival-mode state. Read-only."""
+
+    session = get_survival_state(settings)
+    if session is None:
+        return SurvivalStateResponse(
+            active=False, session=None, message=copy_strings.SURVIVAL_EXIT
+        )
+    return SurvivalStateResponse(
+        active=True, session=session, message=copy_strings.SURVIVAL_ENTER
+    )
+
+
+@app.post("/survival/enter", response_model=SurvivalStateResponse, status_code=201)
+def survival_enter(request: SurvivalToggleRequest = SurvivalToggleRequest()) -> SurvivalStateResponse:
+    """Idempotently enable survival mode as a targetless local focus session."""
+
+    session, _ = enter_survival_mode(note=request.note, settings=settings)
+    return SurvivalStateResponse(
+        active=True, session=session, message=copy_strings.SURVIVAL_ENTER
+    )
+
+
+@app.post("/survival/exit", response_model=SurvivalStateResponse)
+def survival_exit(request: SurvivalToggleRequest = SurvivalToggleRequest()) -> SurvivalStateResponse:
+    """Idempotently disable survival mode. The request body is accepted for symmetry."""
+
+    _ = request
+    exit_survival_mode(settings=settings)
+    return SurvivalStateResponse(
+        active=False, session=None, message=copy_strings.SURVIVAL_EXIT
+    )
 
 
 @app.post("/mvs/suggest", response_model=MVSSuggestResponse)

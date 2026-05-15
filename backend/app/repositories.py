@@ -15,6 +15,7 @@ from app.schemas import (
     DashboardResponse,
     DashboardToday,
     EventResponse,
+    FocusPanelResponse,
     FocusSessionResponse,
     FocusTarget,
     InboxItemResponse,
@@ -197,18 +198,30 @@ def list_tasks(status: str = "open", settings: Settings | None = None) -> list[T
 
 
 def get_today_summary(settings: Settings | None = None) -> TodayResponse:
-    """Return counts and one oldest open item to focus on today."""
+    """Return counts and one oldest open item to focus on today.
 
+    When survival mode is active, this is a display filter: rows are not deleted
+    or hidden from direct lookup, but the visible count is capped to the
+    configured bare-minimum task limit. Inbox capture/triage remains available.
+    """
+
+    effective_settings = settings or Settings()
     open_tasks = [
         task
-        for task in list_tasks(settings=settings)
+        for task in list_tasks(settings=effective_settings)
         if task.block_state != "parked"
     ]
-    open_inbox_items = list_inbox_items(settings=settings)
+    open_inbox_items = list_inbox_items(settings=effective_settings)
+    survival_active = is_survival_active(settings=effective_settings)
+    visible_tasks = (
+        open_tasks[: effective_settings.survival_max_tasks]
+        if survival_active
+        else open_tasks
+    )
 
     one_thing: TodayOneThingResponse | None = None
-    if open_tasks:
-        oldest_task = open_tasks[0]
+    if visible_tasks:
+        oldest_task = visible_tasks[0]
         one_thing = TodayOneThingResponse(
             type="task",
             id=oldest_task.id,
@@ -227,8 +240,10 @@ def get_today_summary(settings: Settings | None = None) -> TodayResponse:
         if one_thing is not None
         else "Nothing is waiting right now. You can capture the next thought when it appears."
     )
+    if survival_active:
+        message = "Survival mode is on. Showing the bare minimum."
     return TodayResponse(
-        open_tasks_count=len(open_tasks),
+        open_tasks_count=len(visible_tasks),
         inbox_count=len(open_inbox_items),
         one_thing=one_thing,
         message=message,
@@ -1305,6 +1320,97 @@ def stop_focus_session(
     return session, action_id
 
 
+def is_survival_active(settings: Settings | None = None) -> bool:
+    """Return whether survival mode is currently active."""
+
+    return get_active_focus_session("survival", settings=settings) is not None
+
+
+def get_survival_state(
+    settings: Settings | None = None,
+) -> FocusSessionResponse | None:
+    """Return the active survival session, if any."""
+
+    return get_active_focus_session("survival", settings=settings)
+
+
+def enter_survival_mode(
+    note: str | None = None, settings: Settings | None = None
+) -> tuple[FocusSessionResponse, int | None]:
+    """Idempotently enable survival mode using a targetless focus session."""
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        existing_row = _active_focus_row(connection, "survival")
+        if existing_row is not None:
+            return _focus_session_from_row(existing_row), None
+        cursor = connection.execute(
+            """
+            INSERT INTO focus_sessions
+              (kind, target_type, target_id, status, started_at, note)
+            VALUES ('survival', NULL, NULL, 'active', ?, ?)
+            """,
+            (timestamp, note),
+        )
+        session_id = cursor.lastrowid
+        row = connection.execute(_FOCUS_SELECT, (session_id,)).fetchone()
+        assert row is not None
+        session = _focus_session_from_row(row)
+        action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('enter_survival', 'focus_session', ?, NULL, ?, ?)
+            """,
+            (
+                session.id,
+                json.dumps({"focus_session": session.model_dump()}),
+                timestamp,
+            ),
+        )
+        action_id = action_cursor.lastrowid
+    return session, action_id
+
+
+def exit_survival_mode(
+    settings: Settings | None = None,
+) -> tuple[FocusSessionResponse | None, int | None]:
+    """Idempotently end the active survival-mode session."""
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = _active_focus_row(connection, "survival")
+        if row is None:
+            return None, None
+        before = _focus_session_from_row(row)
+        connection.execute(
+            "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+            (timestamp, before.id),
+        )
+        updated = connection.execute(_FOCUS_SELECT, (before.id,)).fetchone()
+        assert updated is not None
+        session = _focus_session_from_row(updated)
+        action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('exit_survival', 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                session.id,
+                json.dumps({"focus_session": before.model_dump()}),
+                json.dumps({"focus_session": session.model_dump()}),
+                timestamp,
+            ),
+        )
+        action_id = action_cursor.lastrowid
+    return session, action_id
+
+
 def get_dashboard(
     settings: Settings | None = None,
     recent_actions_limit: int = RECENT_ACTIONS_DEFAULT_LIMIT,
@@ -1315,17 +1421,27 @@ def get_dashboard(
     and the action log. Raw before/after snapshots are not included.
     """
 
-    today = get_today_summary(settings=settings)
-    inbox_items = list_inbox_items(settings=settings)
-    tasks = list_tasks(settings=settings)
-    events = list_events(settings=settings)
-    week = list_week_candidates(settings=settings)
+    effective_settings = settings or Settings()
+    today = get_today_summary(settings=effective_settings)
+    inbox_items = list_inbox_items(settings=effective_settings)
+    tasks = list_tasks(settings=effective_settings)
+    events = list_events(settings=effective_settings)
+    survival_session = get_survival_state(settings=effective_settings)
+    survival_active = survival_session is not None
+    if survival_active:
+        tasks = [task for task in tasks if task.block_state != "parked"][
+            : effective_settings.survival_max_tasks
+        ]
+        events = events[: effective_settings.survival_max_events]
+    week = list_week_candidates(settings=effective_settings)
     recent_actions = list_recent_actions(
-        limit=recent_actions_limit, settings=settings
+        limit=recent_actions_limit, settings=effective_settings
     )
+    focus_result = get_active_focus_with_target("focus", effective_settings)
+    body_double_result = get_active_body_double_with_target(effective_settings)
 
     counts = DashboardCounts(
-        open_tasks=today.open_tasks_count,
+        open_tasks=len(tasks),
         open_inbox=today.inbox_count,
         upcoming_events=len(events),
     )
@@ -1340,6 +1456,14 @@ def get_dashboard(
         events=events,
         week=week,
         recent_actions=recent_actions,
+        focus=FocusPanelResponse(
+            session=focus_result[0] if focus_result is not None else None,
+            target=focus_result[1] if focus_result is not None else None,
+            body_double=(
+                body_double_result[0] if body_double_result is not None else None
+            ),
+            survival=survival_active,
+        ),
     )
 
 

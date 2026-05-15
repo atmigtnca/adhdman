@@ -340,6 +340,7 @@ class DashboardResponse(BaseModel):
     events: list[EventResponse]
     week: list[WeekDay]
     recent_actions: list[RecentActionResponse]
+    focus: "FocusPanelResponse | None" = None
 
 
 # ----- Phase 6: execution helpers -----

@@ -48,6 +48,9 @@ class Settings(BaseSettings):
         default=1800, alias="BODY_DOUBLE_MAX_INTERVAL"
     )
 
+    survival_max_tasks: int = Field(default=1, alias="SURVIVAL_MAX_TASKS")
+    survival_max_events: int = Field(default=1, alias="SURVIVAL_MAX_EVENTS")
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @field_validator(
@@ -76,6 +79,13 @@ class Settings(BaseSettings):
                 "BODY_DOUBLE_DEFAULT_INTERVAL must be between min and max"
             )
         return self
+
+    @field_validator("survival_max_tasks", "survival_max_events")
+    @classmethod
+    def _validate_survival_caps(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("survival caps must be non-negative")
+        return value
 
     @field_validator("llm_timeout_seconds")
     @classmethod

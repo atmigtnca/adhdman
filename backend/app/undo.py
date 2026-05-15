@@ -66,6 +66,8 @@ REVERSIBLE_TYPES: frozenset[str] = frozenset(
         "mvs_create_child",
         "start_focus",
         "replace_focus",
+        "enter_survival",
+        "exit_survival",
     }
 )
 
@@ -421,7 +423,7 @@ def _check_no_conflict(
             )
         return
 
-    if action_type in ("start_focus", "replace_focus"):
+    if action_type in ("start_focus", "replace_focus", "enter_survival", "exit_survival"):
         assert after is not None, f"{action_type} action missing after_json"
         focus_after = after.get("focus_session") if isinstance(after, dict) else None
         assert focus_after is not None, f"{action_type} after_json missing focus_session"
@@ -431,6 +433,19 @@ def _check_no_conflict(
                 f"focus session {target_id} has changed since {action_type} "
                 f"action {action['id']} was recorded"
             )
+        if action_type == "exit_survival":
+            other_active = connection.execute(
+                """
+                SELECT id FROM focus_sessions
+                WHERE kind = 'survival' AND status = 'active' AND id != ?
+                LIMIT 1
+                """,
+                (target_id,),
+            ).fetchone()
+            if other_active is not None:
+                raise ActionConflictError(
+                    "another survival session is already active; exit that before undoing this exit"
+                )
         return
 
     if action_type == "mvs_create_child":
@@ -608,7 +623,7 @@ def _apply_inverse(
         restored = _restore_task(connection, task_before, timestamp)
         return {"task": restored}, {"task": pre}
 
-    if action_type in ("start_focus", "replace_focus"):
+    if action_type in ("start_focus", "replace_focus", "enter_survival"):
         assert after is not None, f"{action_type} action missing after_json"
         focus_after = after.get("focus_session") if isinstance(after, dict) else None
         assert focus_after is not None, f"{action_type} after_json missing focus_session"
@@ -626,6 +641,14 @@ def _apply_inverse(
                     "focus_session": restored,
                     "previous_focus_session": restored_previous,
                 }
+        return {"focus_session": restored}, {"focus_session": pre}
+
+    if action_type == "exit_survival":
+        assert before is not None, "exit_survival action missing before_json"
+        previous = before.get("focus_session") if isinstance(before, dict) else None
+        assert previous is not None, "exit_survival before_json missing focus_session"
+        pre = _row_snapshot_focus_session(connection, target_id)
+        restored = _restore_focus_session(connection, previous, timestamp)
         return {"focus_session": restored}, {"focus_session": pre}
 
     if action_type == "mvs_create_child":
