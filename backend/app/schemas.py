@@ -205,6 +205,21 @@ class ResolveResponse(BaseModel):
     alternates: list[str]
 
 
+class UndoResponse(BaseModel):
+    """Response for POST /undo/{id} and POST /undo/latest.
+
+    ``restored`` is a free-form payload describing the row(s) the inverse
+    touched. Its shape depends on the original action type (e.g. ``{"task": …}``
+    for ``complete_task``, ``{"inbox_item": …}`` for ``capture``). Callers
+    needing typed access should re-fetch the affected resource by id.
+    """
+
+    undo_action_id: int
+    undone_action_id: int
+    undone_action_type: str
+    restored: dict | None = None
+
+
 class TodayOneThingResponse(BaseModel):
     """The single suggested item for today's summary."""
 

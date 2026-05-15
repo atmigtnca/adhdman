@@ -50,6 +50,17 @@ from app.schemas import (
     TaskResponse,
     TaskUpdateRequest,
     TodayResponse,
+    UndoResponse,
+)
+from app.undo import (
+    ActionAlreadyUndoneError,
+    ActionConflictError,
+    ActionNotFoundError,
+    ActionNotReversibleError,
+    NoUndoableActionError,
+    UndoDisabledError,
+    undo_action as undo_action_repo,
+    undo_latest as undo_latest_repo,
 )
 
 settings = get_settings()
@@ -306,3 +317,43 @@ def soft_delete_event(event_id: int) -> EventMutationResponse:
     except EventNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return EventMutationResponse(event=event, action_id=action_id)
+
+
+@app.post("/undo/latest", response_model=UndoResponse)
+def undo_latest_endpoint() -> UndoResponse:
+    """Reverse the most recent reversible action.
+
+    Routed before ``/undo/{action_id}`` so ``latest`` is never interpreted as
+    an integer path parameter.
+    """
+
+    try:
+        result = undo_latest_repo(settings)
+    except UndoDisabledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except NoUndoableActionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ActionNotReversibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return UndoResponse(**result)
+
+
+@app.post("/undo/{action_id}", response_model=UndoResponse)
+def undo_endpoint(action_id: int) -> UndoResponse:
+    """Reverse a specific action by id."""
+
+    try:
+        result = undo_action_repo(action_id, settings)
+    except UndoDisabledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ActionAlreadyUndoneError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionNotReversibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return UndoResponse(**result)
