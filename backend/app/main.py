@@ -2,8 +2,11 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from datetime import datetime
 
@@ -80,6 +83,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+WEB_INDEX = STATIC_DIR / "web" / "index.html"
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/web", include_in_schema=False)
+def web_dashboard() -> FileResponse:
+    """Serve the static read-only web memory dashboard shell.
+
+    The page loads its data exclusively from ``GET /dashboard``. No form,
+    button, or fetch call in this shell may mutate state.
+    """
+
+    return FileResponse(WEB_INDEX, media_type="text/html")
 
 
 @app.get("/health")

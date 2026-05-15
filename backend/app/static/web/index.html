@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADHDman Web Memory</title>
+    <link rel="stylesheet" href="/static/web/web.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>ADHDman Web Memory</h1>
+      <p class="subtitle">local read-only dashboard</p>
+      <p class="badge" aria-label="read only">Read-only</p>
+      <button id="refresh" type="button" class="refresh">Refresh</button>
+      <p id="status" class="status" role="status"></p>
+    </header>
+    <main>
+      <section id="section-now" class="card">
+        <h2>Now</h2>
+        <p id="now-message" class="now-message"></p>
+        <p id="now-one-thing" class="now-one-thing"></p>
+        <ul id="now-counts" class="counts"></ul>
+      </section>
+      <section id="section-inbox" class="card">
+        <h2>Inbox</h2>
+        <ul id="inbox-list" class="item-list"></ul>
+      </section>
+      <section id="section-tasks" class="card">
+        <h2>Tasks</h2>
+        <ul id="tasks-list" class="item-list"></ul>
+      </section>
+      <section id="section-events" class="card">
+        <h2>Events</h2>
+        <ul id="events-list" class="item-list"></ul>
+      </section>
+      <section id="section-week" class="card">
+        <h2>Week</h2>
+        <ol id="week-list" class="week-list"></ol>
+      </section>
+      <section id="section-recent" class="card">
+        <h2>Recent Changes</h2>
+        <ul id="recent-list" class="item-list"></ul>
+      </section>
+    </main>
+    <script src="/static/web/web.js" defer></script>
+  </body>
+</html>

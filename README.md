@@ -182,6 +182,17 @@ SEARCH_AMBIGUITY_THRESHOLD=0.15
 UNDO_ENABLED=true
 ```
 
+## Phase 5 Web Memory
+
+Phase 5 adds a localhost-only, read-only web dashboard that helps you remember what already exists in ADHDman. The page is a small static shell served by the FastAPI backend; the browser fetches only `GET /dashboard` and renders Now, Inbox, Tasks, Events, Week, and Recent Changes sections. There are no forms, no mutation buttons, and no auth surface — Phase 1–3 mutation endpoints remain API/TUI-only.
+
+```bash
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+# open http://127.0.0.1:8000/web in a local browser
+```
+
+The dashboard is read-only by design: the refresh control only re-fetches `GET /dashboard`. Do not expose this app directly to the public internet; keep it bound to `127.0.0.1` or behind SSH tunneling, VPN, or another trusted access-control layer.
+
 ## Development
 
 ```bash
