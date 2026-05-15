@@ -1,5 +1,7 @@
 """Pydantic schemas for ADHDman API requests and responses."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -39,3 +41,20 @@ class TaskResponse(BaseModel):
     created_at: str
     updated_at: str
     completed_at: str | None
+
+
+class TodayOneThingResponse(BaseModel):
+    """The single suggested item for today's summary."""
+
+    type: Literal["task", "inbox"]
+    id: int
+    text: str
+
+
+class TodayResponse(BaseModel):
+    """Response schema for the one-thing today summary."""
+
+    open_tasks_count: int
+    inbox_count: int
+    one_thing: TodayOneThingResponse | None
+    message: str

@@ -14,11 +14,12 @@ from app.repositories import (
     TaskNotOpenError,
     capture_to_inbox,
     complete_task,
+    get_today_summary,
     list_inbox_items,
     list_tasks,
     promote_inbox_item_to_task,
 )
-from app.schemas import CaptureRequest, InboxItemResponse, TaskResponse
+from app.schemas import CaptureRequest, InboxItemResponse, TaskResponse, TodayResponse
 
 settings = get_settings()
 
@@ -72,6 +73,13 @@ def get_tasks() -> list[TaskResponse]:
     """List open tasks oldest first."""
 
     return list_tasks(settings=settings)
+
+
+@app.get("/today", response_model=TodayResponse)
+def get_today() -> TodayResponse:
+    """Return the one-thing summary for today."""
+
+    return get_today_summary(settings=settings)
 
 
 @app.post("/tasks/{task_id}/done", response_model=TaskResponse)

@@ -6,7 +6,7 @@ import sqlite3
 
 from app.config import Settings
 from app.db import get_connection
-from app.schemas import InboxItemResponse, TaskResponse
+from app.schemas import InboxItemResponse, TaskResponse, TodayOneThingResponse, TodayResponse
 
 
 class InboxItemNotFoundError(Exception):
@@ -93,6 +93,41 @@ def list_tasks(status: str = "open", settings: Settings | None = None) -> list[T
         ).fetchall()
 
     return [_task_from_row(row) for row in rows]
+
+
+def get_today_summary(settings: Settings | None = None) -> TodayResponse:
+    """Return counts and one oldest open item to focus on today."""
+
+    open_tasks = list_tasks(settings=settings)
+    open_inbox_items = list_inbox_items(settings=settings)
+
+    one_thing: TodayOneThingResponse | None = None
+    if open_tasks:
+        oldest_task = open_tasks[0]
+        one_thing = TodayOneThingResponse(
+            type="task",
+            id=oldest_task.id,
+            text=oldest_task.title,
+        )
+    elif open_inbox_items:
+        oldest_inbox_item = open_inbox_items[0]
+        one_thing = TodayOneThingResponse(
+            type="inbox",
+            id=oldest_inbox_item.id,
+            text=oldest_inbox_item.text,
+        )
+
+    message = (
+        "One thing is ready."
+        if one_thing is not None
+        else "Nothing is waiting right now. You can capture the next thought when it appears."
+    )
+    return TodayResponse(
+        open_tasks_count=len(open_tasks),
+        inbox_count=len(open_inbox_items),
+        one_thing=one_thing,
+        message=message,
+    )
 
 
 def capture_to_inbox(text: str, settings: Settings | None = None) -> InboxItemResponse:
