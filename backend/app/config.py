@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
     )
     openrouter_model: str = Field(
-        default="inclusionai/ring-2.6-1t:free", alias="OPENROUTER_MODEL"
+        default="inclusionai/ring-2.6-1t", alias="OPENROUTER_MODEL"
     )
     llm_timeout_seconds: float = Field(default=8.0, alias="LLM_TIMEOUT_SECONDS")
     rules_accept_threshold: float = Field(

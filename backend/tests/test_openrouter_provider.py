@@ -21,7 +21,7 @@ def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = {
         "OPENROUTER_API_KEY": "test-key",
         "OPENROUTER_BASE_URL": "https://openrouter.example/api/v1",
-        "OPENROUTER_MODEL": "inclusionai/ring-2.6-1t:free",
+        "OPENROUTER_MODEL": "inclusionai/ring-2.6-1t",
         "LLM_TIMEOUT_SECONDS": 1.5,
     }
     defaults.update(overrides)
@@ -71,7 +71,7 @@ def test_complete_sends_expected_request_shape() -> None:
 
     body = captured["body"]
     assert isinstance(body, dict)
-    assert body["model"] == "inclusionai/ring-2.6-1t:free"
+    assert body["model"] == "inclusionai/ring-2.6-1t"
     assert body["temperature"] == 0.0
     assert body["messages"] == [
         {"role": "system", "content": "system prompt"},

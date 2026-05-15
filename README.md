@@ -109,7 +109,7 @@ Configuration (placeholders only — never commit real keys):
 # .env (local only; not committed)
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=inclusionai/ring-2.6-1t:free
+OPENROUTER_MODEL=inclusionai/ring-2.6-1t
 LLM_TIMEOUT_SECONDS=8.0
 RULES_ACCEPT_THRESHOLD=0.85
 CLASSIFY_ENABLED=true

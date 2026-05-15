@@ -58,7 +58,7 @@ The pipeline is a fixed order. Each stage may short-circuit. The final stage is 
    - Rules produce a confidence in `[0.0, 1.0]`. Confidence ≥ `RULES_ACCEPT_THRESHOLD` short-circuits and skips the LLM.
 3. **LLM pass (optional)** — only when `OPENROUTER_API_KEY` is present in the environment and rules did not short-circuit:
    - Provider: OpenRouter.
-   - Model: `inclusionai/ring-2.6-1t:free`.
+   - Model: `inclusionai/ring-2.6-1t`.
    - Endpoint: OpenRouter chat completions, called over `httpx` with a strict timeout.
    - The provider receives the normalized text plus a small system prompt that defines the JSON schema and the allowed intents.
 4. **Schema validation** — the LLM response is parsed as JSON and validated against the strict schema below. On invalid JSON or schema mismatch, one **repair attempt** is made by re-prompting with the previous output and the validator error message.
@@ -96,7 +96,7 @@ Responsibilities:
 
 - Read `OPENROUTER_API_KEY` and optional `OPENROUTER_BASE_URL` from settings. If the key is missing, the provider reports `available=False` and the pipeline skips stage 3.
 - Use a single small system prompt that names the schema and forbids extra text.
-- Call OpenRouter with model `inclusionai/ring-2.6-1t:free`, a low temperature, and a hard request timeout (default 8s).
+- Call OpenRouter with model `inclusionai/ring-2.6-1t`, a low temperature, and a hard request timeout (default 8s).
 - Never log the API key. Log request metadata (model, latency, status) but not the full user text in production logs; tests may capture it.
 - Return a typed result: `LLMResult(text: str)` on success or `LLMError(kind, message)` on failure. The pipeline maps errors to fallback.
 
@@ -108,7 +108,7 @@ Extend `backend/app/config.py` with:
 
 - `OPENROUTER_API_KEY: str | None = None`
 - `OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"`
-- `OPENROUTER_MODEL: str = "inclusionai/ring-2.6-1t:free"`
+- `OPENROUTER_MODEL: str = "inclusionai/ring-2.6-1t"`
 - `LLM_TIMEOUT_SECONDS: float = 8.0`
 - `RULES_ACCEPT_THRESHOLD: float = 0.85`
 - `CLASSIFY_ENABLED: bool = True` — kill switch that forces every capture to land in the inbox.
@@ -167,7 +167,7 @@ All tests run offline. No real network calls. Use a fake `LLMProvider` injected 
   - missing API key → never calls the provider; falls back to inbox.
   - LLM timeout / HTTP error → inbox fallback with `source = "fallback"`.
   - invalid JSON → one repair attempt; success path and final-fallback path both covered.
-- **Provider tests** (`test_openrouter_provider.py`): use a fake transport to assert the request shape (model name `inclusionai/ring-2.6-1t:free`, auth header presence, timeout applied) without making real calls.
+- **Provider tests** (`test_openrouter_provider.py`): use a fake transport to assert the request shape (model name `inclusionai/ring-2.6-1t`, auth header presence, timeout applied) without making real calls.
 - **API tests** (`test_capture_classify.py`):
   - `POST /capture` with imperative text creates a task and an action row.
   - `POST /capture` with datetime-like text creates an event and an action row.
