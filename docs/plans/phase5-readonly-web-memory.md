@@ -326,12 +326,8 @@ Use meaningful, non-noisy commits:
 
 Merge adjacent commits if a slice is too small to review independently. Do not inflate commit count artificially.
 
-## Public-safety Grep
+## Public-safety Check
 
-Before pushing:
-
-```bash
-git grep -n -E 'seojongho|서종호|/home/ubuntu|OPENROUTER_API_KEY=sk-|BEGIN (RSA|OPENSSH|PRIVATE) KEY|password\s*=|token\s*=|secret\s*=' -- . ':!*.lock'
-```
+Before pushing, run the repository's current secret/private-context scan from the shell or an equivalent reviewer checklist. Avoid storing the exact sensitive-term regex in this public plan, because the check pattern itself can create noisy self-matches.
 
 Expected: no sensitive matches. Placeholder strings in `.env.example` are allowed only when they do not contain real values.

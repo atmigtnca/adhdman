@@ -280,3 +280,61 @@ class TodayResponse(BaseModel):
     inbox_count: int
     one_thing: TodayOneThingResponse | None
     message: str
+
+
+class RecentActionResponse(BaseModel):
+    """Read-only summary row from the action log for the dashboard.
+
+    Excludes ``before_json`` and ``after_json`` so raw snapshots never leak into
+    the web payload. Use the dedicated undo API to reverse an action.
+    """
+
+    id: int
+    action_type: str
+    target_type: str
+    target_id: int
+    created_at: str
+    undone_at: str | None = None
+
+
+class DashboardCounts(BaseModel):
+    """Headline counts for the dashboard's Now section."""
+
+    open_tasks: int
+    open_inbox: int
+    upcoming_events: int
+
+
+class DashboardToday(BaseModel):
+    """The Now block: one-thing focus plus calm counts."""
+
+    message: str
+    one_thing: TodayOneThingResponse | None
+    counts: DashboardCounts
+
+
+class WeekItem(BaseModel):
+    """A task or event placed on a specific date in the week view."""
+
+    type: Literal["task", "event"]
+    id: int
+    title: str
+    time: str | None = None
+
+
+class WeekDay(BaseModel):
+    """A single day in the grouped week view."""
+
+    date: str
+    items: list[WeekItem]
+
+
+class DashboardResponse(BaseModel):
+    """Combined read-only payload for the web memory dashboard."""
+
+    today: DashboardToday
+    inbox: list[InboxItemResponse]
+    tasks: list[TaskResponse]
+    events: list[EventResponse]
+    week: list[WeekDay]
+    recent_actions: list[RecentActionResponse]

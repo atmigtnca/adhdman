@@ -25,6 +25,7 @@ from app.repositories import (
     complete_task,
     delete_event as delete_event_repo,
     delete_task as delete_task_repo,
+    get_dashboard,
     get_event as get_event_repo,
     get_task as get_task_repo,
     get_today_summary,
@@ -39,6 +40,7 @@ from app.schemas import (
     CaptureRequest,
     CaptureResponse,
     ClassifyResponse,
+    DashboardResponse,
     EventMutationResponse,
     EventResponse,
     EventUpdateRequest,
@@ -192,6 +194,18 @@ def get_today() -> TodayResponse:
     """Return the one-thing summary for today."""
 
     return get_today_summary(settings=settings)
+
+
+@app.get("/dashboard", response_model=DashboardResponse)
+def get_dashboard_endpoint() -> DashboardResponse:
+    """Return the combined read-only payload for the web memory dashboard.
+
+    Composes ``today``, ``inbox``, ``tasks``, ``events``, a derived ``week``
+    view, and a small ``recent_actions`` summary. This endpoint never mutates
+    rows and never exposes raw before/after snapshots from the action log.
+    """
+
+    return get_dashboard(settings=settings)
 
 
 @app.post("/resolve", response_model=ResolveResponse)

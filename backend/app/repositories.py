@@ -11,12 +11,22 @@ from app.schemas import (
     CaptureClassification,
     CaptureClassificationCreated,
     CaptureResponse,
+    DashboardCounts,
+    DashboardResponse,
+    DashboardToday,
     EventResponse,
     InboxItemResponse,
+    RecentActionResponse,
     TaskResponse,
     TodayOneThingResponse,
     TodayResponse,
+    WeekDay,
+    WeekItem,
 )
+
+
+RECENT_ACTIONS_MAX_LIMIT = 100
+RECENT_ACTIONS_DEFAULT_LIMIT = 20
 
 
 class InboxItemNotFoundError(Exception):
@@ -824,3 +834,153 @@ def delete_event(
         action_id = cursor.lastrowid
 
     return event, action_id
+
+
+def list_recent_actions(
+    limit: int = RECENT_ACTIONS_DEFAULT_LIMIT,
+    settings: Settings | None = None,
+) -> list[RecentActionResponse]:
+    """Return the most recent action-log rows for the read-only dashboard.
+
+    Only metadata is returned: ``before_json``/``after_json`` snapshots are
+    excluded so raw row contents do not leak through the web payload. ``limit``
+    is clamped to ``[1, RECENT_ACTIONS_MAX_LIMIT]`` to keep the response small.
+    """
+
+    safe_limit = max(1, min(int(limit), RECENT_ACTIONS_MAX_LIMIT))
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, action_type, target_type, target_id, created_at, undone_at
+            FROM actions
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+
+    return [
+        RecentActionResponse(
+            id=row["id"],
+            action_type=row["action_type"],
+            target_type=row["target_type"],
+            target_id=row["target_id"],
+            created_at=row["created_at"],
+            undone_at=row["undone_at"],
+        )
+        for row in rows
+    ]
+
+
+def _date_and_time_from_iso(value: str | None) -> tuple[str, str | None] | None:
+    """Split an ISO-8601 string into ``(YYYY-MM-DD, HH:MM)``.
+
+    Returns ``None`` when the value is missing or unparseable so the week view
+    only contains rows with a usable date.
+    """
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    date_str = parsed.date().isoformat()
+    has_time = parsed.hour or parsed.minute or parsed.second or parsed.microsecond
+    time_str = parsed.strftime("%H:%M") if has_time else None
+    return date_str, time_str
+
+
+def list_week_candidates(settings: Settings | None = None) -> list[WeekDay]:
+    """Return open tasks and non-deleted events grouped by date.
+
+    Only rows with a parseable date column (``tasks.due_at`` /
+    ``events.starts_at``) are included; rows without a date are surfaced through
+    the inbox/tasks/events sections instead. Soft-deleted rows are excluded.
+    Days are ordered ascending; items within a day sort by time then id.
+    """
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        task_rows = connection.execute(
+            """
+            SELECT id, title, due_at
+            FROM tasks
+            WHERE status = 'open' AND due_at IS NOT NULL
+            ORDER BY id ASC
+            """,
+        ).fetchall()
+        event_rows = connection.execute(
+            """
+            SELECT id, title, starts_at
+            FROM events
+            WHERE status != 'deleted' AND starts_at IS NOT NULL
+            ORDER BY id ASC
+            """,
+        ).fetchall()
+
+    grouped: dict[str, list[WeekItem]] = {}
+    for row in task_rows:
+        split = _date_and_time_from_iso(row["due_at"])
+        if split is None:
+            continue
+        date_str, time_str = split
+        grouped.setdefault(date_str, []).append(
+            WeekItem(type="task", id=row["id"], title=row["title"], time=time_str)
+        )
+    for row in event_rows:
+        split = _date_and_time_from_iso(row["starts_at"])
+        if split is None:
+            continue
+        date_str, time_str = split
+        grouped.setdefault(date_str, []).append(
+            WeekItem(type="event", id=row["id"], title=row["title"], time=time_str)
+        )
+
+    week: list[WeekDay] = []
+    for date_str in sorted(grouped):
+        items = sorted(
+            grouped[date_str],
+            key=lambda item: (item.time is None, item.time or "", item.id),
+        )
+        week.append(WeekDay(date=date_str, items=items))
+    return week
+
+
+def get_dashboard(
+    settings: Settings | None = None,
+    recent_actions_limit: int = RECENT_ACTIONS_DEFAULT_LIMIT,
+) -> DashboardResponse:
+    """Compose the read-only dashboard payload from existing read helpers.
+
+    This function never mutates rows: it only reads from inbox, tasks, events,
+    and the action log. Raw before/after snapshots are not included.
+    """
+
+    today = get_today_summary(settings=settings)
+    inbox_items = list_inbox_items(settings=settings)
+    tasks = list_tasks(settings=settings)
+    events = list_events(settings=settings)
+    week = list_week_candidates(settings=settings)
+    recent_actions = list_recent_actions(
+        limit=recent_actions_limit, settings=settings
+    )
+
+    counts = DashboardCounts(
+        open_tasks=today.open_tasks_count,
+        open_inbox=today.inbox_count,
+        upcoming_events=len(events),
+    )
+    return DashboardResponse(
+        today=DashboardToday(
+            message=today.message,
+            one_thing=today.one_thing,
+            counts=counts,
+        ),
+        inbox=inbox_items,
+        tasks=tasks,
+        events=events,
+        week=week,
+        recent_actions=recent_actions,
+    )
