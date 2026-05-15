@@ -17,6 +17,7 @@ from app.resolver import InvalidTimezoneError, resolve as resolve_datetime
 from app.llm.base import LLMProvider
 from app.llm.openrouter import OpenRouterProvider
 from app.repositories import (
+    BreakdownConflictError,
     EventNotFoundError,
     FocusSessionConflictError,
     FocusTargetNotFoundError,
@@ -26,6 +27,7 @@ from app.repositories import (
     TaskNotFoundError,
     TaskNotOpenError,
     apply_classification_to_inbox_item,
+    breakdown_task as breakdown_task_repo,
     capture_to_inbox,
     complete_task,
     delete_event as delete_event_repo,
@@ -37,14 +39,20 @@ from app.repositories import (
     get_today_summary,
     list_events,
     list_inbox_items,
+    list_task_children,
     list_tasks,
     promote_inbox_item_to_task,
     start_focus_session as start_focus_session_repo,
     stop_focus_session as stop_focus_session_repo,
+    suggest_breakdown_steps,
     update_event as update_event_repo,
     update_task as update_task_repo,
 )
 from app.schemas import (
+    BreakdownRequest,
+    BreakdownResponse,
+    BreakdownSuggestRequest,
+    BreakdownSuggestResponse,
     CaptureRequest,
     CaptureResponse,
     ClassifyResponse,
@@ -341,6 +349,58 @@ def soft_delete_task(task_id: int) -> TaskMutationResponse:
     except TaskNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return TaskMutationResponse(task=task, action_id=action_id)
+
+
+@app.post(
+    "/tasks/{task_id}/breakdown",
+    response_model=BreakdownResponse,
+    status_code=201,
+)
+def break_down_task(task_id: int, request: BreakdownRequest) -> BreakdownResponse:
+    """Split a task into 2–5 child tasks and log a single reversible action."""
+
+    try:
+        parent, children, action_id = breakdown_task_repo(
+            task_id, request.steps, source=request.source, settings=settings
+        )
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BreakdownConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InvalidUpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BreakdownResponse(parent=parent, children=children, action_id=action_id)
+
+
+@app.get("/tasks/{task_id}/children", response_model=list[TaskResponse])
+def list_children(task_id: int) -> list[TaskResponse]:
+    """Return the child tasks for ``task_id`` (includes soft-deleted children)."""
+
+    try:
+        return list_task_children(task_id, settings=settings)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post(
+    "/tasks/{task_id}/breakdown/suggest",
+    response_model=BreakdownSuggestResponse,
+)
+def suggest_task_breakdown(
+    task_id: int, request: BreakdownSuggestRequest = BreakdownSuggestRequest()
+) -> BreakdownSuggestResponse:
+    """Return rules-only breakdown suggestions. Read-only; persists nothing."""
+
+    max_steps = request.max_steps
+    try:
+        steps, source = suggest_breakdown_steps(task_id, max_steps, settings)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return BreakdownSuggestResponse(
+        steps=steps,
+        source=source,
+        prompt=copy_strings.BREAKDOWN_PROMPT,
+    )
 
 
 @app.get("/events/{event_id}", response_model=EventResponse)

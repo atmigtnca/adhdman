@@ -61,6 +61,7 @@ REVERSIBLE_TYPES: frozenset[str] = frozenset(
         "classify_task",
         "classify_event",
         "classify_inbox_fallback",
+        "breakdown",
     }
 )
 
@@ -104,7 +105,7 @@ def _row_snapshot_task(
     row = connection.execute(
         """
         SELECT id, title, status, source_inbox_item_id, due_at,
-               created_at, updated_at, completed_at
+               created_at, updated_at, completed_at, parent_task_id
         FROM tasks WHERE id = ?
         """,
         (task_id,),
@@ -350,6 +351,33 @@ def _check_no_conflict(
         # Pure log row: nothing to validate.
         return
 
+    if action_type == "breakdown":
+        assert after is not None, "breakdown action missing after_json"
+        for child_snapshot in after.get("children", []):
+            child_id = child_snapshot.get("id")
+            if child_id is None:
+                continue
+            current = _row_snapshot_task(connection, child_id)
+            if current is None:
+                raise ActionConflictError(
+                    f"child task {child_id} for breakdown action "
+                    f"{action['id']} is missing"
+                )
+            if current.get("status") == "deleted":
+                # Already soft-deleted: undo can no-op past this child.
+                continue
+            if current.get("status") != child_snapshot.get("status"):
+                raise ActionConflictError(
+                    f"child task {child_id} has been completed or changed "
+                    f"since breakdown action {action['id']} was recorded"
+                )
+            if current.get("updated_at") != child_snapshot.get("updated_at"):
+                raise ActionConflictError(
+                    f"child task {child_id} has been modified since "
+                    f"breakdown action {action['id']} was recorded"
+                )
+        return
+
 
 def _apply_inverse(
     connection: sqlite3.Connection,
@@ -462,6 +490,24 @@ def _apply_inverse(
         # callers can still mark the action undone and keep the trail tidy.
         pre = _row_snapshot_inbox(connection, target_id)
         return {"inbox_item": pre}, {"inbox_item": pre}
+
+    if action_type == "breakdown":
+        assert after is not None, "breakdown action missing after_json"
+        child_snapshots = after.get("children", [])
+        pre_children: list[dict[str, Any] | None] = []
+        restored_children: list[dict[str, Any] | None] = []
+        for child_snapshot in child_snapshots:
+            child_id = child_snapshot.get("id")
+            if child_id is None:
+                continue
+            pre_children.append(_row_snapshot_task(connection, child_id))
+            restored_children.append(
+                _soft_delete_task(connection, child_id, timestamp)
+            )
+        return (
+            {"parent_id": target_id, "children": restored_children},
+            {"parent_id": target_id, "children": pre_children},
+        )
 
     raise ActionNotReversibleError(
         f"action_type '{action_type}' is not reversible"

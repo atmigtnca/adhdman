@@ -108,6 +108,7 @@ class TaskResponse(BaseModel):
     created_at: str
     updated_at: str
     completed_at: str | None
+    parent_task_id: int | None = None
 
 
 class TaskUpdateRequest(BaseModel):

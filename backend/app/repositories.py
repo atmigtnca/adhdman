@@ -59,6 +59,11 @@ class FocusTargetNotFoundError(Exception):
     """Raised when a focus target row does not exist or is soft-deleted."""
 
 
+class BreakdownConflictError(Exception):
+    """Raised when a task cannot be broken down (deleted, already has children
+    that have been completed, etc.)."""
+
+
 class FocusSessionConflictError(Exception):
     """Raised when an active focus session already exists and replace is not set."""
 
@@ -98,6 +103,7 @@ def _task_from_row(row: sqlite3.Row) -> TaskResponse:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         completed_at=row["completed_at"],
+        parent_task_id=row["parent_task_id"] if "parent_task_id" in keys else None,
     )
 
 
@@ -604,7 +610,8 @@ def complete_task(task_id: int, settings: Settings | None = None) -> TaskRespons
 
 _TASK_SELECT = (
     "SELECT id, title, status, source_inbox_item_id, due_at, "
-    "created_at, updated_at, completed_at FROM tasks WHERE id = ?"
+    "created_at, updated_at, completed_at, parent_task_id "
+    "FROM tasks WHERE id = ?"
 )
 
 _EVENT_SELECT = (
@@ -1299,3 +1306,138 @@ def get_dashboard(
         week=week,
         recent_actions=recent_actions,
     )
+
+
+# ----- Phase 6: task breakdown -----
+
+
+def list_task_children(
+    parent_task_id: int, settings: Settings | None = None
+) -> list[TaskResponse]:
+    """Return children of ``parent_task_id`` in creation order.
+
+    Soft-deleted children are included so the caller can render a recovery view;
+    callers can filter by ``status``.
+    """
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        parent = connection.execute(_TASK_SELECT, (parent_task_id,)).fetchone()
+        if parent is None:
+            raise TaskNotFoundError(f"task {parent_task_id} not found")
+        rows = connection.execute(
+            """
+            SELECT id, title, status, source_inbox_item_id, due_at,
+                   created_at, updated_at, completed_at, parent_task_id
+            FROM tasks
+            WHERE parent_task_id = ?
+            ORDER BY id ASC
+            """,
+            (parent_task_id,),
+        ).fetchall()
+
+    return [_task_from_row(row) for row in rows]
+
+
+def breakdown_task(
+    parent_task_id: int,
+    steps: list[str],
+    source: str = "manual",
+    settings: Settings | None = None,
+) -> tuple[TaskResponse, list[TaskResponse], int]:
+    """Create 2–5 child tasks for ``parent_task_id`` and log a single action.
+
+    The parent row itself is not mutated. The action's ``before_json`` carries
+    the parent snapshot (for context) and ``after_json`` carries the parent
+    snapshot plus the list of created child task snapshots and their ids, so
+    ``/undo`` can soft-delete those children together.
+    """
+
+    if not 2 <= len(steps) <= 5:
+        raise InvalidUpdateError("steps must contain between 2 and 5 entries")
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        parent_row = connection.execute(_TASK_SELECT, (parent_task_id,)).fetchone()
+        if parent_row is None or parent_row["status"] == "deleted":
+            raise TaskNotFoundError(f"task {parent_task_id} not found")
+        if parent_row["parent_task_id"] is not None:
+            raise BreakdownConflictError(
+                f"task {parent_task_id} is already a child of another task"
+            )
+
+        parent = _task_from_row(parent_row)
+        children: list[TaskResponse] = []
+        child_ids: list[int] = []
+        for step in steps:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks
+                  (title, status, source_inbox_item_id, parent_task_id,
+                   created_at, updated_at)
+                VALUES (?, 'open', NULL, ?, ?, ?)
+                """,
+                (step, parent_task_id, timestamp, timestamp),
+            )
+            child_id = cursor.lastrowid
+            child_ids.append(child_id)
+            row = connection.execute(_TASK_SELECT, (child_id,)).fetchone()
+            assert row is not None
+            children.append(_task_from_row(row))
+
+        action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('breakdown', 'task', ?, ?, ?, ?)
+            """,
+            (
+                parent.id,
+                json.dumps({"parent": parent.model_dump()}),
+                json.dumps(
+                    {
+                        "parent": parent.model_dump(),
+                        "child_ids": child_ids,
+                        "children": [child.model_dump() for child in children],
+                        "source": source,
+                    }
+                ),
+                timestamp,
+            ),
+        )
+        action_id = action_cursor.lastrowid
+
+    return parent, children, action_id
+
+
+def suggest_breakdown_steps(
+    parent_task_id: int,
+    max_steps: int | None = None,
+    settings: Settings | None = None,
+) -> tuple[list[str], str]:
+    """Return rules-only breakdown suggestions for a task.
+
+    Read-only: writes nothing. Returns ``(steps, source)`` where ``source`` is
+    always ``"rules"`` in this slice. An LLM-backed path can be added later by
+    branching on ``settings.openrouter_api_key``; this slice keeps the helper
+    offline and deterministic so tests stay hermetic.
+    """
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        parent_row = connection.execute(_TASK_SELECT, (parent_task_id,)).fetchone()
+    if parent_row is None or parent_row["status"] == "deleted":
+        raise TaskNotFoundError(f"task {parent_task_id} not found")
+
+    title = (parent_row["title"] or "").strip() or "this task"
+    template = (
+        f"Outline {title}",
+        f"Do the smallest part of {title}",
+        f"Wrap up {title}",
+    )
+    steps = [step[:500] for step in template]
+    if max_steps is not None:
+        steps = steps[: max(2, min(max_steps, 5))]
+    return steps, "rules"
