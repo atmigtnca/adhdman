@@ -6,16 +6,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.db import ensure_database_parent
+from app.db import init_db
+from app.repositories import capture_to_inbox
+from app.schemas import CaptureRequest, InboxItemResponse
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Prepare the local SQLite directory without creating domain schema yet."""
+    """Initialize the local SQLite schema before serving requests."""
 
-    ensure_database_parent(settings)
+    init_db(settings)
     yield
 
 
@@ -27,3 +29,10 @@ def health() -> dict[str, str]:
     """Health check endpoint used by local and Docker verification."""
 
     return {"status": "ok"}
+
+
+@app.post("/capture", response_model=InboxItemResponse, status_code=201)
+def capture(request: CaptureRequest) -> InboxItemResponse:
+    """Capture free-form text into the inbox."""
+
+    return capture_to_inbox(request.text, settings)
