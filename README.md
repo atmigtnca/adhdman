@@ -37,6 +37,22 @@ Out of scope for Phase 0:
 - CRUD/domain schema
 - remote deployment
 
+## Phase 1 API examples
+
+Run the backend locally, then exercise the Phase 1 capture core with these requests:
+
+```bash
+curl -s http://127.0.0.1:8000/health
+curl -s -X POST http://127.0.0.1:8000/capture -H 'Content-Type: application/json' -d '{"text":"pay rent"}'
+curl -s http://127.0.0.1:8000/inbox
+curl -s -X POST http://127.0.0.1:8000/inbox/1/promote-task
+curl -s http://127.0.0.1:8000/tasks
+curl -s -X POST http://127.0.0.1:8000/tasks/1/done
+curl -s http://127.0.0.1:8000/today
+```
+
+Reminder: ADHDman is local-first and has no built-in authentication. Keep it bound to localhost or place it behind SSH tunneling, VPN, or another trusted access-control layer; do not expose it directly to the public internet.
+
 ## Development
 
 ```bash
