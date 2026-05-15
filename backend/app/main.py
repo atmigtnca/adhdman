@@ -3,10 +3,13 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
+from app.classification import EmptyTextError, classify
 from app.config import get_settings
 from app.db import init_db
+from app.llm.base import LLMProvider
+from app.llm.openrouter import OpenRouterProvider
 from app.repositories import (
     InboxItemNotFoundError,
     InboxItemNotOpenError,
@@ -19,7 +22,13 @@ from app.repositories import (
     list_tasks,
     promote_inbox_item_to_task,
 )
-from app.schemas import CaptureRequest, InboxItemResponse, TaskResponse, TodayResponse
+from app.schemas import (
+    CaptureRequest,
+    ClassifyResponse,
+    InboxItemResponse,
+    TaskResponse,
+    TodayResponse,
+)
 
 settings = get_settings()
 
@@ -54,6 +63,45 @@ def capture(request: CaptureRequest) -> InboxItemResponse:
     """Capture free-form text into the inbox."""
 
     return capture_to_inbox(request.text, settings)
+
+
+def get_llm_provider() -> LLMProvider | None:
+    """Return the production LLM provider, or None when no key is configured.
+
+    Tests inject a fake via ``app.dependency_overrides[get_llm_provider]`` to
+    keep the suite offline.
+    """
+
+    if not settings.openrouter_api_key:
+        return None
+    return OpenRouterProvider(settings)
+
+
+@app.post("/classify", response_model=ClassifyResponse)
+def classify_text(
+    request: CaptureRequest,
+    provider: LLMProvider | None = Depends(get_llm_provider),
+) -> ClassifyResponse:
+    """Classify text without persisting anything.
+
+    Read-only counterpart to ``POST /capture`` used for tests, the future TUI
+    preview, and debugging. Never writes inbox, task, event, or action rows.
+    """
+
+    try:
+        result = classify(request.text, settings=settings, provider=provider)
+    except EmptyTextError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return ClassifyResponse(
+        intent=result.output.intent,
+        confidence=result.output.confidence,
+        title=result.output.title,
+        starts_at=result.output.starts_at,
+        ends_at=result.output.ends_at,
+        reason=result.output.reason,
+        source=result.source,
+    )
 
 
 @app.post("/inbox/{inbox_item_id}/promote-task", response_model=TaskResponse, status_code=201)

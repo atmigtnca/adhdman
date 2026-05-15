@@ -21,6 +21,22 @@ class CaptureRequest(BaseModel):
         return normalized
 
 
+class ClassifyResponse(BaseModel):
+    """Response schema for the read-only /classify endpoint.
+
+    Mirrors ``ClassifierOutput`` and adds the pipeline ``source`` so callers can
+    see which stage produced the result. No persistence happens for this route.
+    """
+
+    intent: Literal["task", "event", "inbox"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    title: str | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+    reason: str | None = None
+    source: Literal["rules", "llm", "repair", "fallback"]
+
+
 class InboxItemResponse(BaseModel):
     """Response schema for an inbox item."""
 
