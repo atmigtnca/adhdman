@@ -5,9 +5,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 
+from datetime import datetime
+
 from app.classification import EmptyTextError, classify
 from app.config import get_settings
 from app.db import init_db
+from app.resolver import InvalidTimezoneError, resolve as resolve_datetime
 from app.llm.base import LLMProvider
 from app.llm.openrouter import OpenRouterProvider
 from app.repositories import (
@@ -30,6 +33,9 @@ from app.schemas import (
     ClassifyResponse,
     EventResponse,
     InboxItemResponse,
+    ResolveRequest,
+    ResolveResponse,
+    ResolveResultSchema,
     TaskResponse,
     TodayResponse,
 )
@@ -160,6 +166,49 @@ def get_today() -> TodayResponse:
     """Return the one-thing summary for today."""
 
     return get_today_summary(settings=settings)
+
+
+@app.post("/resolve", response_model=ResolveResponse)
+def resolve_endpoint(request: ResolveRequest) -> ResolveResponse:
+    """Parse a free-form datetime phrase. Read-only; never persists anything.
+
+    ``now`` and ``tz`` default to the current time and ``LOCAL_TIMEZONE`` so the
+    same endpoint works for both client-driven and server-driven calls. The
+    resolver itself is pure: callers that need reproducible output should pass
+    both fields explicitly.
+    """
+
+    tz_name = request.tz or settings.local_timezone
+    try:
+        from app.resolver.resolver import load_timezone
+
+        zone = load_timezone(tz_name)
+    except InvalidTimezoneError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if request.now is not None:
+        try:
+            now_dt = datetime.fromisoformat(request.now)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"invalid 'now' timestamp: {exc}"
+            ) from exc
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=zone)
+    else:
+        now_dt = datetime.now(tz=zone)
+
+    result = resolve_datetime(request.text, now=now_dt, tz=zone)
+    return ResolveResponse(
+        resolved=ResolveResultSchema(
+            starts_at=result.starts_at,
+            ends_at=result.ends_at,
+            kind=result.kind,
+            confidence=result.confidence,
+            source=result.source,
+        ),
+        alternates=list(result.alternates),
+    )
 
 
 @app.post("/tasks/{task_id}/done", response_model=TaskResponse)

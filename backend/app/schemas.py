@@ -108,6 +108,39 @@ class TaskResponse(BaseModel):
     completed_at: str | None
 
 
+class ResolveRequest(BaseModel):
+    """Request body for the deterministic /resolve endpoint."""
+
+    text: str = Field(min_length=1, max_length=500)
+    now: str | None = None
+    tz: str | None = None
+
+    @field_validator("text")
+    @classmethod
+    def _normalize_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("text must not be empty")
+        return normalized
+
+
+class ResolveResultSchema(BaseModel):
+    """The single best interpretation returned by /resolve."""
+
+    starts_at: str | None
+    ends_at: str | None
+    kind: Literal["absolute", "relative", "none"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    source: Literal["rules"]
+
+
+class ResolveResponse(BaseModel):
+    """Response body for /resolve."""
+
+    resolved: ResolveResultSchema
+    alternates: list[str]
+
+
 class TodayOneThingResponse(BaseModel):
     """The single suggested item for today's summary."""
 
