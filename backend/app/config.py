@@ -7,7 +7,7 @@ there are no auth, account, role, or multi-user settings by design.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,7 +38,44 @@ class Settings(BaseSettings):
     )
     undo_enabled: bool = Field(default=True, alias="UNDO_ENABLED")
 
+    body_double_default_interval: int = Field(
+        default=300, alias="BODY_DOUBLE_DEFAULT_INTERVAL"
+    )
+    body_double_min_interval: int = Field(
+        default=60, alias="BODY_DOUBLE_MIN_INTERVAL"
+    )
+    body_double_max_interval: int = Field(
+        default=1800, alias="BODY_DOUBLE_MAX_INTERVAL"
+    )
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @field_validator(
+        "body_double_default_interval",
+        "body_double_min_interval",
+        "body_double_max_interval",
+    )
+    @classmethod
+    def _validate_body_double_intervals(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("body-double intervals must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_body_double_interval_order(self) -> "Settings":
+        if self.body_double_min_interval > self.body_double_max_interval:
+            raise ValueError(
+                "BODY_DOUBLE_MIN_INTERVAL must be <= BODY_DOUBLE_MAX_INTERVAL"
+            )
+        if not (
+            self.body_double_min_interval
+            <= self.body_double_default_interval
+            <= self.body_double_max_interval
+        ):
+            raise ValueError(
+                "BODY_DOUBLE_DEFAULT_INTERVAL must be between min and max"
+            )
+        return self
 
     @field_validator("llm_timeout_seconds")
     @classmethod

@@ -72,6 +72,18 @@ class FocusSessionConflictError(Exception):
         self.existing = existing
 
 
+class BodyDoubleSessionConflictError(Exception):
+    """Raised when an active body-double session already exists and replace is not set."""
+
+    def __init__(self, existing: "FocusSessionResponse") -> None:
+        super().__init__("a body-double session is already active")
+        self.existing = existing
+
+
+class BodyDoubleNotActiveError(Exception):
+    """Raised when a body-double check-in is attempted without an active session."""
+
+
 def _now_iso() -> str:
     """Return a UTC timestamp as an ISO-8601 string."""
 
@@ -1047,55 +1059,64 @@ def _auto_end_focus_for_target(
     timestamp: str,
     target_type: str,
     target_id: int,
+    kind: str | None = None,
 ) -> int | None:
-    """End any active focus session pointing at the given (now-deleted) target.
+    """End an active focus session pointing at the given deleted target.
 
     Writes an ``auto_end_focus`` action so the trail explains the transition.
+    When ``kind`` is provided, only that focus session kind is considered.
     Returns the focus_sessions.id ended, or None if there was nothing to end.
     Caller must already hold the write transaction.
     """
 
-    row = connection.execute(
-        """
+    kind_filter = " AND kind = ?" if kind is not None else ""
+    params: tuple[object, ...] = (
+        (target_type, target_id, kind) if kind is not None else (target_type, target_id)
+    )
+    rows = connection.execute(
+        f"""
         SELECT id, kind, target_type, target_id, status, started_at, ended_at,
                interval_seconds, note, last_check_in_at
         FROM focus_sessions
-        WHERE status = 'active' AND target_type = ? AND target_id = ?
+        WHERE status = 'active' AND target_type = ? AND target_id = ?{kind_filter}
         ORDER BY id DESC
-        LIMIT 1
         """,
-        (target_type, target_id),
-    ).fetchone()
-    if row is None:
+        params,
+    ).fetchall()
+    if not rows:
         return None
-    before = _focus_session_from_row(row)
-    connection.execute(
-        "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
-        (timestamp, before.id),
-    )
-    updated = connection.execute(_FOCUS_SELECT, (before.id,)).fetchone()
-    after = _focus_session_from_row(updated) if updated is not None else before
-    connection.execute(
-        """
-        INSERT INTO actions
-          (action_type, target_type, target_id, before_json, after_json, created_at)
-        VALUES ('auto_end_focus', 'focus_session', ?, ?, ?, ?)
-        """,
-        (
-            before.id,
-            json.dumps({"focus_session": before.model_dump()}),
-            json.dumps(
-                {
-                    "focus_session": after.model_dump(),
-                    "reason": "target_deleted",
-                    "target_type": target_type,
-                    "target_id": target_id,
-                }
+    ended_first_id: int | None = None
+    for row in rows:
+        before = _focus_session_from_row(row)
+        if ended_first_id is None:
+            ended_first_id = before.id
+        connection.execute(
+            "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+            (timestamp, before.id),
+        )
+        updated = connection.execute(_FOCUS_SELECT, (before.id,)).fetchone()
+        after = _focus_session_from_row(updated) if updated is not None else before
+        connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('auto_end_focus', 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                before.id,
+                json.dumps({"focus_session": before.model_dump()}),
+                json.dumps(
+                    {
+                        "focus_session": after.model_dump(),
+                        "reason": "target_deleted",
+                        "target_type": target_type,
+                        "target_id": target_id,
+                    }
+                ),
+                timestamp,
             ),
-            timestamp,
-        ),
-    )
-    return before.id
+        )
+    return ended_first_id
 
 
 def _active_focus_row(
@@ -1151,7 +1172,11 @@ def get_active_focus_with_target(
             )
         except FocusTargetNotFoundError:
             _auto_end_focus_for_target(
-                connection, _now_iso(), session.target_type, session.target_id
+                connection,
+                _now_iso(),
+                session.target_type,
+                session.target_id,
+                kind=kind,
             )
             return None
     return session, target
@@ -1551,3 +1576,213 @@ def apply_stuck_choice(
         action_id = action_cursor.lastrowid
 
     return task, action_id
+
+
+# ----- Phase 6: body-double sessions -----
+
+
+def get_active_body_double_with_target(
+    settings: Settings | None = None,
+) -> tuple[FocusSessionResponse, FocusTarget | None] | None:
+    """Return the active body-double session plus its resolved target.
+
+    Unlike one-thing focus, a body-double session has an optional target. If the
+    target row has been soft-deleted since the session started, the session is
+    auto-ended so the read surface is never stuck pointing at a ghost target.
+    """
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = _active_focus_row(connection, "body_double")
+        if row is None:
+            return None
+        session = _focus_session_from_row(row)
+        if session.target_type is None or session.target_id is None:
+            return session, None
+        try:
+            target = _resolve_focus_target(
+                connection, session.target_type, session.target_id
+            )
+        except FocusTargetNotFoundError:
+            _auto_end_focus_for_target(
+                connection,
+                _now_iso(),
+                session.target_type,
+                session.target_id,
+                kind="body_double",
+            )
+            return None
+    return session, target
+
+
+def start_body_double_session(
+    interval_seconds: int,
+    note: str | None = None,
+    target_type: str | None = None,
+    target_id: int | None = None,
+    replace: bool = False,
+    settings: Settings | None = None,
+) -> tuple[FocusSessionResponse, FocusTarget | None, int]:
+    """Start a single active body-double session.
+
+    Returns ``(session, target, action_id)``. ``target`` is None when no target
+    was supplied. Raises ``BodyDoubleSessionConflictError`` when one is already
+    active and ``replace`` is False, and ``FocusTargetNotFoundError`` when a
+    target is supplied but missing or soft-deleted.
+    """
+
+    if (target_type is None) != (target_id is None):
+        raise FocusTargetNotFoundError(
+            "target_type and target_id must be provided together"
+        )
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        resolved_target: FocusTarget | None = None
+        if target_type is not None and target_id is not None:
+            resolved_target = _resolve_focus_target(connection, target_type, target_id)
+
+        existing_row = _active_focus_row(connection, "body_double")
+        replaced_existing: FocusSessionResponse | None = None
+        if existing_row is not None:
+            existing = _focus_session_from_row(existing_row)
+            if not replace:
+                raise BodyDoubleSessionConflictError(existing)
+            connection.execute(
+                "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+                (timestamp, existing.id),
+            )
+            replaced_existing = existing
+
+        cursor = connection.execute(
+            """
+            INSERT INTO focus_sessions
+              (kind, target_type, target_id, status, started_at, interval_seconds,
+               note, last_check_in_at)
+            VALUES ('body_double', ?, ?, 'active', ?, ?, ?, ?)
+            """,
+            (
+                resolved_target.type if resolved_target is not None else None,
+                resolved_target.id if resolved_target is not None else None,
+                timestamp,
+                interval_seconds,
+                note,
+                timestamp,
+            ),
+        )
+        session_id = cursor.lastrowid
+        row = connection.execute(_FOCUS_SELECT, (session_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("failed to load body-double session after insert")
+        session = _focus_session_from_row(row)
+
+        action_type = (
+            "replace_body_double" if replaced_existing is not None else "start_body_double"
+        )
+        before_payload = (
+            {"focus_session": replaced_existing.model_dump()}
+            if replaced_existing is not None
+            else None
+        )
+        after_payload: dict = {"focus_session": session.model_dump()}
+        if resolved_target is not None:
+            after_payload["target"] = resolved_target.model_dump()
+        action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES (?, 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                action_type,
+                session.id,
+                json.dumps(before_payload) if before_payload is not None else None,
+                json.dumps(after_payload),
+                timestamp,
+            ),
+        )
+        action_id = action_cursor.lastrowid
+
+    return session, resolved_target, action_id
+
+
+def stop_body_double_session(
+    settings: Settings | None = None,
+) -> tuple[FocusSessionResponse | None, int | None]:
+    """End the active body-double session. Idempotent: returns (None, None) if none."""
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = _active_focus_row(connection, "body_double")
+        if row is None:
+            return None, None
+        before = _focus_session_from_row(row)
+        connection.execute(
+            "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+            (timestamp, before.id),
+        )
+        updated_row = connection.execute(_FOCUS_SELECT, (before.id,)).fetchone()
+        assert updated_row is not None
+        session = _focus_session_from_row(updated_row)
+        cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('stop_body_double', 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                session.id,
+                json.dumps({"focus_session": before.model_dump()}),
+                json.dumps({"focus_session": session.model_dump()}),
+                timestamp,
+            ),
+        )
+        action_id = cursor.lastrowid
+
+    return session, action_id
+
+
+def record_body_double_checkin(
+    settings: Settings | None = None,
+) -> FocusSessionResponse:
+    """Record a body-double heartbeat on the active session.
+
+    Updates ``last_check_in_at`` and writes a ``body_double_checkin`` audit row.
+    Raises :class:`BodyDoubleNotActiveError` when no session is active.
+    """
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = _active_focus_row(connection, "body_double")
+        if row is None:
+            raise BodyDoubleNotActiveError("no active body-double session")
+        before = _focus_session_from_row(row)
+        connection.execute(
+            "UPDATE focus_sessions SET last_check_in_at = ? WHERE id = ?",
+            (timestamp, before.id),
+        )
+        updated_row = connection.execute(_FOCUS_SELECT, (before.id,)).fetchone()
+        assert updated_row is not None
+        session = _focus_session_from_row(updated_row)
+        connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('body_double_checkin', 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                session.id,
+                json.dumps({"focus_session": before.model_dump()}),
+                json.dumps({"focus_session": session.model_dump()}),
+                timestamp,
+            ),
+        )
+
+    return session

@@ -17,6 +17,8 @@ from app.resolver import InvalidTimezoneError, resolve as resolve_datetime
 from app.llm.base import LLMProvider
 from app.llm.openrouter import OpenRouterProvider
 from app.repositories import (
+    BodyDoubleNotActiveError,
+    BodyDoubleSessionConflictError,
     BreakdownConflictError,
     EventNotFoundError,
     FocusSessionConflictError,
@@ -33,6 +35,7 @@ from app.repositories import (
     complete_task,
     delete_event as delete_event_repo,
     delete_task as delete_task_repo,
+    get_active_body_double_with_target,
     get_active_focus_with_target,
     get_dashboard,
     get_event as get_event_repo,
@@ -43,13 +46,20 @@ from app.repositories import (
     list_task_children,
     list_tasks,
     promote_inbox_item_to_task,
+    record_body_double_checkin as record_body_double_checkin_repo,
+    start_body_double_session as start_body_double_session_repo,
     start_focus_session as start_focus_session_repo,
+    stop_body_double_session as stop_body_double_session_repo,
     stop_focus_session as stop_focus_session_repo,
     suggest_breakdown_steps,
     update_event as update_event_repo,
     update_task as update_task_repo,
 )
 from app.schemas import (
+    BodyDoubleCheckInResponse,
+    BodyDoubleConflictResponse,
+    BodyDoubleCurrentResponse,
+    BodyDoubleStartRequest,
     BreakdownRequest,
     BreakdownResponse,
     BreakdownSuggestRequest,
@@ -487,6 +497,92 @@ def focus_stop() -> FocusCurrentResponse:
 
     stop_focus_session_repo(settings)
     return FocusCurrentResponse(message=copy_strings.EMPTY_FOCUS)
+
+
+@app.get("/body-double/current", response_model=BodyDoubleCurrentResponse)
+def body_double_current() -> BodyDoubleCurrentResponse:
+    """Return the active body-double session (kind=body_double), if any."""
+
+    result = get_active_body_double_with_target(settings)
+    if result is None:
+        return BodyDoubleCurrentResponse(message=copy_strings.BODY_DOUBLE_EMPTY)
+    session, target = result
+    return BodyDoubleCurrentResponse(
+        session=session, target=target, message=copy_strings.BODY_DOUBLE_START
+    )
+
+
+@app.post(
+    "/body-double/start",
+    response_model=BodyDoubleCurrentResponse,
+    status_code=201,
+)
+def body_double_start(request: BodyDoubleStartRequest) -> BodyDoubleCurrentResponse:
+    """Start (or replace) the single active body-double session.
+
+    Local timer only. No external presence or notification service is contacted.
+    """
+
+    interval = (
+        request.interval_seconds
+        if request.interval_seconds is not None
+        else settings.body_double_default_interval
+    )
+    if not (
+        settings.body_double_min_interval
+        <= interval
+        <= settings.body_double_max_interval
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"interval_seconds must be between "
+                f"{settings.body_double_min_interval} and "
+                f"{settings.body_double_max_interval}"
+            ),
+        )
+
+    try:
+        session, target, _ = start_body_double_session_repo(
+            interval_seconds=interval,
+            note=request.note,
+            target_type=request.target_type,
+            target_id=request.target_id,
+            replace=request.replace,
+            settings=settings,
+        )
+    except FocusTargetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BodyDoubleSessionConflictError as exc:
+        payload = BodyDoubleConflictResponse(
+            message=copy_strings.BODY_DOUBLE_CONFLICT, existing=exc.existing
+        )
+        raise HTTPException(status_code=409, detail=payload.model_dump()) from exc
+
+    return BodyDoubleCurrentResponse(
+        session=session, target=target, message=copy_strings.BODY_DOUBLE_START
+    )
+
+
+@app.post("/body-double/check-in", response_model=BodyDoubleCheckInResponse)
+def body_double_check_in() -> BodyDoubleCheckInResponse:
+    """Record a heartbeat on the active body-double session."""
+
+    try:
+        session = record_body_double_checkin_repo(settings)
+    except BodyDoubleNotActiveError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return BodyDoubleCheckInResponse(
+        session=session, message=copy_strings.BODY_DOUBLE_CHECK_IN
+    )
+
+
+@app.post("/body-double/stop", response_model=BodyDoubleCurrentResponse)
+def body_double_stop() -> BodyDoubleCurrentResponse:
+    """End the active body-double session. Idempotent."""
+
+    stop_body_double_session_repo(settings)
+    return BodyDoubleCurrentResponse(message=copy_strings.BODY_DOUBLE_STOP)
 
 
 @app.get("/stuck/options", response_model=StuckOptionsResponse)

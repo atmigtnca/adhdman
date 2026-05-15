@@ -483,10 +483,11 @@ class StuckResponse(BaseModel):
 class BodyDoubleStartRequest(BaseModel):
     """Request body for POST /body-double/start."""
 
-    interval_seconds: int = Field(ge=1)
+    interval_seconds: int | None = Field(default=None, ge=1)
     note: str | None = Field(default=None, max_length=500)
     target_type: FocusTargetType | None = None
     target_id: int | None = Field(default=None, ge=1)
+    replace: bool = False
 
     model_config = {"extra": "forbid"}
 
@@ -497,6 +498,21 @@ class BodyDoubleStartRequest(BaseModel):
         if has_type != has_id:
             raise ValueError("target_type and target_id must be provided together")
         return self
+
+
+class BodyDoubleCurrentResponse(BaseModel):
+    """Read-only response describing the active body-double session (if any)."""
+
+    session: FocusSessionResponse | None = None
+    target: FocusTarget | None = None
+    message: str
+
+
+class BodyDoubleConflictResponse(BaseModel):
+    """Calm structured payload returned when a body-double session already exists."""
+
+    message: str
+    existing: FocusSessionResponse
 
 
 class BodyDoubleCheckInResponse(BaseModel):

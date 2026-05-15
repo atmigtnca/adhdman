@@ -33,6 +33,12 @@ STUCK_OPTIONS: Mapping[str, str] = MappingProxyType(
 
 BODY_DOUBLE_START: str = "Sitting with you. We will check in at the chosen pace."
 
+BODY_DOUBLE_CONFLICT: str = (
+    "A body-double session is already running. Keep it, or replace it on purpose."
+)
+
+BODY_DOUBLE_EMPTY: str = "No body-double session right now. That is fine."
+
 BODY_DOUBLE_CHECK_IN: str = "Still here. Want to keep going, pause, or wrap up?"
 
 BODY_DOUBLE_STOP: str = "Session closed. Thanks for sitting together."
@@ -55,6 +61,8 @@ ALL_STRINGS: tuple[str, ...] = (
     FOCUS_CONFLICT,
     BLOCK_RESET_PROMPT,
     BODY_DOUBLE_START,
+    BODY_DOUBLE_CONFLICT,
+    BODY_DOUBLE_EMPTY,
     BODY_DOUBLE_CHECK_IN,
     BODY_DOUBLE_STOP,
     SURVIVAL_ENTER,

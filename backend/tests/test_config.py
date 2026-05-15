@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.config import Settings
 from app.db import ensure_database_parent, get_database_path
 
@@ -38,6 +40,33 @@ def test_phase_3_settings_have_safe_defaults(monkeypatch) -> None:
     assert settings.search_max_candidates == 5
     assert settings.search_ambiguity_threshold == 0.15
     assert settings.undo_enabled is True
+
+
+def test_phase_6_body_double_interval_settings_are_consistent() -> None:
+    settings = Settings(
+        _env_file=None,
+        BODY_DOUBLE_DEFAULT_INTERVAL=300,
+        BODY_DOUBLE_MIN_INTERVAL=60,
+        BODY_DOUBLE_MAX_INTERVAL=1800,
+    )
+
+    assert settings.body_double_min_interval <= settings.body_double_default_interval
+    assert settings.body_double_default_interval <= settings.body_double_max_interval
+
+    with pytest.raises(ValueError):
+        Settings(
+            _env_file=None,
+            BODY_DOUBLE_DEFAULT_INTERVAL=30,
+            BODY_DOUBLE_MIN_INTERVAL=60,
+            BODY_DOUBLE_MAX_INTERVAL=1800,
+        )
+    with pytest.raises(ValueError):
+        Settings(
+            _env_file=None,
+            BODY_DOUBLE_DEFAULT_INTERVAL=300,
+            BODY_DOUBLE_MIN_INTERVAL=2000,
+            BODY_DOUBLE_MAX_INTERVAL=1800,
+        )
 
 
 def test_ensure_database_parent_creates_directory(tmp_path: Path) -> None:
