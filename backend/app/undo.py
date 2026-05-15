@@ -63,6 +63,9 @@ REVERSIBLE_TYPES: frozenset[str] = frozenset(
         "classify_inbox_fallback",
         "breakdown",
         "block_reset",
+        "mvs_create_child",
+        "start_focus",
+        "replace_focus",
     }
 )
 
@@ -126,6 +129,48 @@ def _row_snapshot_event(
         (event_id,),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def _row_snapshot_focus_session(
+    connection: sqlite3.Connection, session_id: int
+) -> dict[str, Any] | None:
+    row = connection.execute(
+        """
+        SELECT id, kind, target_type, target_id, status, started_at, ended_at,
+               interval_seconds, note, last_check_in_at
+        FROM focus_sessions WHERE id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _restore_focus_session(
+    connection: sqlite3.Connection, snapshot: dict[str, Any], timestamp: str
+) -> dict[str, Any]:
+    connection.execute(
+        """
+        UPDATE focus_sessions
+        SET kind = ?, target_type = ?, target_id = ?, status = ?, started_at = ?,
+            ended_at = ?, interval_seconds = ?, note = ?, last_check_in_at = ?
+        WHERE id = ?
+        """,
+        (
+            snapshot["kind"],
+            snapshot.get("target_type"),
+            snapshot.get("target_id"),
+            snapshot["status"],
+            snapshot["started_at"],
+            snapshot.get("ended_at"),
+            snapshot.get("interval_seconds"),
+            snapshot.get("note"),
+            snapshot.get("last_check_in_at"),
+            snapshot["id"],
+        ),
+    )
+    restored = _row_snapshot_focus_session(connection, snapshot["id"])
+    assert restored is not None
+    return restored
 
 
 def _restore_inbox(
@@ -302,6 +347,18 @@ def _check_no_conflict(
                 f"task {target_id} has changed since promote_task "
                 f"action {action['id']} was recorded"
             )
+        open_children = connection.execute(
+            """
+            SELECT id FROM tasks
+            WHERE parent_task_id = ? AND status != 'deleted'
+            LIMIT 1
+            """,
+            (target_id,),
+        ).fetchone()
+        if open_children is not None:
+            raise ActionConflictError(
+                f"task {target_id} has child tasks; undo child actions first"
+            )
         inbox_snapshot = after.get("inbox_item") or {}
         inbox_id = inbox_snapshot.get("id")
         if inbox_id is not None:
@@ -361,6 +418,45 @@ def _check_no_conflict(
             raise ActionConflictError(
                 f"task {target_id} has changed since block_reset "
                 f"action {action['id']} was recorded"
+            )
+        return
+
+    if action_type in ("start_focus", "replace_focus"):
+        assert after is not None, f"{action_type} action missing after_json"
+        focus_after = after.get("focus_session") if isinstance(after, dict) else None
+        assert focus_after is not None, f"{action_type} after_json missing focus_session"
+        current = _row_snapshot_focus_session(connection, target_id)
+        if _row_diverged(current, focus_after):
+            raise ActionConflictError(
+                f"focus session {target_id} has changed since {action_type} "
+                f"action {action['id']} was recorded"
+            )
+        return
+
+    if action_type == "mvs_create_child":
+        # The child task created by /mvs/commit may have been completed or
+        # edited since; if so, surface the divergence rather than clobbering.
+        assert after is not None, "mvs_create_child action missing after_json"
+        child_snapshot = after.get("child") if isinstance(after, dict) else None
+        if child_snapshot is None:
+            return
+        current = _row_snapshot_task(connection, target_id)
+        if current is None:
+            raise ActionConflictError(
+                f"task {target_id} for mvs_create_child action "
+                f"{action['id']} is missing"
+            )
+        if current.get("status") == "deleted":
+            return
+        if current.get("status") != child_snapshot.get("status"):
+            raise ActionConflictError(
+                f"task {target_id} has been completed or changed since "
+                f"mvs_create_child action {action['id']} was recorded"
+            )
+        if current.get("updated_at") != child_snapshot.get("updated_at"):
+            raise ActionConflictError(
+                f"task {target_id} has been modified since "
+                f"mvs_create_child action {action['id']} was recorded"
             )
         return
 
@@ -510,6 +606,38 @@ def _apply_inverse(
         assert task_before is not None, "block_reset before_json missing task"
         pre = _row_snapshot_task(connection, target_id)
         restored = _restore_task(connection, task_before, timestamp)
+        return {"task": restored}, {"task": pre}
+
+    if action_type in ("start_focus", "replace_focus"):
+        assert after is not None, f"{action_type} action missing after_json"
+        focus_after = after.get("focus_session") if isinstance(after, dict) else None
+        assert focus_after is not None, f"{action_type} after_json missing focus_session"
+        pre = _row_snapshot_focus_session(connection, target_id)
+        connection.execute(
+            "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+            (timestamp, target_id),
+        )
+        restored: dict[str, Any] | None = _row_snapshot_focus_session(connection, target_id)
+        if action_type == "replace_focus" and before is not None:
+            previous = before.get("focus_session") if isinstance(before, dict) else None
+            if previous is not None:
+                restored_previous = _restore_focus_session(connection, previous, timestamp)
+                restored = {
+                    "focus_session": restored,
+                    "previous_focus_session": restored_previous,
+                }
+        return {"focus_session": restored}, {"focus_session": pre}
+
+    if action_type == "mvs_create_child":
+        # Inverse: soft-delete the child task that /mvs/commit created. The
+        # child is the action's target row. Any active focus session that
+        # still points at this child is auto-ended through the soft-delete
+        # path so the focus surface does not strand on a deleted target.
+        from app.repositories import _auto_end_focus_for_target
+
+        pre = _row_snapshot_task(connection, target_id)
+        restored = _soft_delete_task(connection, target_id, timestamp)
+        _auto_end_focus_for_target(connection, timestamp, "task", target_id)
         return {"task": restored}, {"task": pre}
 
     if action_type == "breakdown":

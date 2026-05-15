@@ -1786,3 +1786,244 @@ def record_body_double_checkin(
         )
 
     return session
+
+
+# ----- Phase 6: minimum viable step (MVS) -----
+
+
+def suggest_mvs_step(
+    target_type: str,
+    target_id: int,
+    settings: Settings | None = None,
+) -> tuple[str, str]:
+    """Return a single rules-only minimum-viable-step suggestion.
+
+    Read-only: writes nothing. Returns ``(step, source)`` where ``source`` is
+    always ``"rules"`` in this slice; an LLM-backed path can be added later by
+    branching on settings, but the deterministic rule keeps tests hermetic and
+    avoids surprising remote calls for what is meant to be the smallest action.
+    """
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        if target_type == "task":
+            row = connection.execute(_TASK_SELECT, (target_id,)).fetchone()
+            if row is None or row["status"] == "deleted":
+                raise FocusTargetNotFoundError(f"task {target_id} not found")
+            title = (row["title"] or "").strip()
+        elif target_type == "inbox_item":
+            row = connection.execute(
+                "SELECT id, text, status FROM inbox_items WHERE id = ?",
+                (target_id,),
+            ).fetchone()
+            if row is None or row["status"] == "deleted":
+                raise FocusTargetNotFoundError(f"inbox_item {target_id} not found")
+            title = (row["text"] or "").strip()
+        else:
+            raise FocusTargetNotFoundError(f"unknown target_type '{target_type}'")
+
+    base = title or "this"
+    step = f"Spend two minutes on {base}"[:500]
+    return step, "rules"
+
+
+def commit_mvs_step(
+    target_type: str,
+    target_id: int,
+    step: str,
+    settings: Settings | None = None,
+) -> tuple[TaskResponse, FocusSessionResponse, FocusTarget, int, int]:
+    """Create a single child task carrying ``step`` and start focus on it.
+
+    For ``target_type='task'`` the new task is a child of ``target_id`` via
+    ``parent_task_id``. For ``target_type='inbox_item'`` the inbox row is
+    promoted into a parent task carrying the original capture text, then a
+    single child is created under it; this preserves the original thought in
+    both the inbox row and the parent task while making the smallest next step
+    its own focusable row.
+
+    Returns ``(child_task, focus_session, target, child_action_id,
+    focus_action_id)``. The focus start uses ``replace=True`` so an in-flight
+    focus session is calmly swapped instead of rejecting the commit.
+    """
+
+    step_text = step.strip()
+    if not step_text:
+        raise InvalidUpdateError("step must not be empty")
+    if len(step_text) > 500:
+        step_text = step_text[:500]
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+
+        if target_type == "task":
+            parent_row = connection.execute(_TASK_SELECT, (target_id,)).fetchone()
+            if parent_row is None or parent_row["status"] == "deleted":
+                raise FocusTargetNotFoundError(f"task {target_id} not found")
+            if parent_row["parent_task_id"] is not None:
+                raise BreakdownConflictError(
+                    f"task {target_id} is already a child of another task"
+                )
+            parent_task_id = target_id
+        elif target_type == "inbox_item":
+            inbox_row = connection.execute(
+                """
+                SELECT id, text, status, created_at, updated_at,
+                       promoted_to_type, promoted_to_id
+                FROM inbox_items
+                WHERE id = ?
+                """,
+                (target_id,),
+            ).fetchone()
+            if inbox_row is None:
+                raise FocusTargetNotFoundError(f"inbox_item {target_id} not found")
+            if inbox_row["status"] != "open":
+                raise InboxItemNotOpenError(
+                    f"inbox item {target_id} is not open"
+                )
+
+            before_inbox = dict(inbox_row)
+            promote_cursor = connection.execute(
+                """
+                INSERT INTO tasks (title, status, source_inbox_item_id, created_at, updated_at)
+                VALUES (?, 'open', ?, ?, ?)
+                """,
+                (inbox_row["text"], target_id, timestamp, timestamp),
+            )
+            parent_task_id = promote_cursor.lastrowid
+            connection.execute(
+                """
+                UPDATE inbox_items
+                SET status = 'promoted',
+                    updated_at = ?,
+                    promoted_to_type = 'task',
+                    promoted_to_id = ?
+                WHERE id = ?
+                """,
+                (timestamp, parent_task_id, target_id),
+            )
+            promoted_task_row = connection.execute(
+                _TASK_SELECT, (parent_task_id,)
+            ).fetchone()
+            updated_inbox_row = connection.execute(
+                """
+                SELECT id, text, status, created_at, updated_at,
+                       promoted_to_type, promoted_to_id
+                FROM inbox_items
+                WHERE id = ?
+                """,
+                (target_id,),
+            ).fetchone()
+            assert promoted_task_row is not None and updated_inbox_row is not None
+            promoted_task = _task_from_row(promoted_task_row)
+            connection.execute(
+                """
+                INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+                VALUES ('promote_task', 'task', ?, ?, ?, ?)
+                """,
+                (
+                    parent_task_id,
+                    json.dumps(before_inbox),
+                    json.dumps(
+                        {
+                            "task": promoted_task.model_dump(),
+                            "inbox_item": dict(updated_inbox_row),
+                        }
+                    ),
+                    timestamp,
+                ),
+            )
+        else:
+            raise FocusTargetNotFoundError(f"unknown target_type '{target_type}'")
+
+        child_cursor = connection.execute(
+            """
+            INSERT INTO tasks
+              (title, status, source_inbox_item_id, parent_task_id,
+               created_at, updated_at)
+            VALUES (?, 'open', NULL, ?, ?, ?)
+            """,
+            (step_text, parent_task_id, timestamp, timestamp),
+        )
+        child_id = child_cursor.lastrowid
+        child_row = connection.execute(_TASK_SELECT, (child_id,)).fetchone()
+        assert child_row is not None
+        child_task = _task_from_row(child_row)
+
+        child_action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('mvs_create_child', 'task', ?, ?, ?, ?)
+            """,
+            (
+                child_id,
+                json.dumps({"parent_task_id": parent_task_id}),
+                json.dumps(
+                    {
+                        "parent_task_id": parent_task_id,
+                        "child": child_task.model_dump(),
+                    }
+                ),
+                timestamp,
+            ),
+        )
+        child_action_id = child_action_cursor.lastrowid
+
+        # Start focus on the new child, swapping any existing session calmly.
+        existing_focus_row = _active_focus_row(connection, "focus")
+        replaced_existing: FocusSessionResponse | None = None
+        if existing_focus_row is not None:
+            replaced_existing = _focus_session_from_row(existing_focus_row)
+            connection.execute(
+                "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+                (timestamp, replaced_existing.id),
+            )
+
+        focus_cursor = connection.execute(
+            """
+            INSERT INTO focus_sessions
+              (kind, target_type, target_id, status, started_at, note)
+            VALUES ('focus', 'task', ?, 'active', ?, NULL)
+            """,
+            (child_id, timestamp),
+        )
+        focus_id = focus_cursor.lastrowid
+        focus_row = connection.execute(_FOCUS_SELECT, (focus_id,)).fetchone()
+        assert focus_row is not None
+        focus_session = _focus_session_from_row(focus_row)
+        target = FocusTarget(type="task", id=child_id, title=child_task.title)
+
+        focus_action_type = (
+            "replace_focus" if replaced_existing is not None else "start_focus"
+        )
+        focus_before_payload = (
+            {"focus_session": replaced_existing.model_dump()}
+            if replaced_existing is not None
+            else None
+        )
+        focus_after_payload = {
+            "focus_session": focus_session.model_dump(),
+            "target": target.model_dump(),
+        }
+        focus_action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES (?, 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                focus_action_type,
+                focus_session.id,
+                json.dumps(focus_before_payload)
+                if focus_before_payload is not None
+                else None,
+                json.dumps(focus_after_payload),
+                timestamp,
+            ),
+        )
+        focus_action_id = focus_action_cursor.lastrowid
+
+    return child_task, focus_session, target, child_action_id, focus_action_id

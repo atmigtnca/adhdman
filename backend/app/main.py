@@ -32,6 +32,7 @@ from app.repositories import (
     apply_stuck_choice as apply_stuck_choice_repo,
     breakdown_task as breakdown_task_repo,
     capture_to_inbox,
+    commit_mvs_step as commit_mvs_step_repo,
     complete_task,
     delete_event as delete_event_repo,
     delete_task as delete_task_repo,
@@ -52,6 +53,7 @@ from app.repositories import (
     stop_body_double_session as stop_body_double_session_repo,
     stop_focus_session as stop_focus_session_repo,
     suggest_breakdown_steps,
+    suggest_mvs_step as suggest_mvs_step_repo,
     update_event as update_event_repo,
     update_task as update_task_repo,
 )
@@ -75,6 +77,10 @@ from app.schemas import (
     FocusCurrentResponse,
     FocusStartRequest,
     InboxItemResponse,
+    MVSCommitRequest,
+    MVSCommitResponse,
+    MVSSuggestRequest,
+    MVSSuggestResponse,
     ResolveRequest,
     ResolveResponse,
     ResolveResultSchema,
@@ -632,6 +638,43 @@ def stuck(request: StuckRequest) -> StuckResponse:
     except FocusTargetNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return StuckResponse(task=task, choice=request.choice, action_id=action_id)
+
+
+@app.post("/mvs/suggest", response_model=MVSSuggestResponse)
+def mvs_suggest(request: MVSSuggestRequest) -> MVSSuggestResponse:
+    """Return one rules-only minimum-viable-step suggestion. Read-only."""
+
+    try:
+        step, source = suggest_mvs_step_repo(
+            request.target_type, request.target_id, settings
+        )
+    except FocusTargetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MVSSuggestResponse(step=step, source=source, prompt=copy_strings.MVS_PROMPT)
+
+
+@app.post("/mvs/commit", response_model=MVSCommitResponse, status_code=201)
+def mvs_commit(request: MVSCommitRequest) -> MVSCommitResponse:
+    """Create a single child task carrying the step and start focus on it."""
+
+    try:
+        task, focus, _target, task_action_id, focus_action_id = commit_mvs_step_repo(
+            request.target_type, request.target_id, request.step, settings
+        )
+    except FocusTargetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InboxItemNotOpenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BreakdownConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InvalidUpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MVSCommitResponse(
+        task=task,
+        focus=focus,
+        task_action_id=task_action_id,
+        focus_action_id=focus_action_id,
+    )
 
 
 @app.post("/undo/latest", response_model=UndoResponse)
