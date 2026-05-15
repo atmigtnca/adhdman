@@ -11,14 +11,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tui = [
+  "textual>=0.60",
+]
 dev = [
   "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "textual>=0.60",
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["backend"]
-testpaths = ["backend/tests"]
+pythonpath = ["backend", "."]
+testpaths = ["backend/tests", "tui/tests"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-src = ["backend"]
+src = ["backend", "tui"]

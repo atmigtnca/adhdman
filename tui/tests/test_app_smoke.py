@@ -1,0 +1,298 @@
+from __future__ import annotations
+
+import httpx
+import pytest
+
+from tui.app import TuiApp
+from tui.client import TuiClient
+
+
+def _mock_client(handler):
+    return TuiClient(
+        base_url="http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_boots_and_renders_help():
+    c = _mock_client(lambda r: httpx.Response(200, json={}))
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        await pilot.press(*"/help")
+        await pilot.press("enter")
+        await pilot.pause()
+    c.close()
+
+
+@pytest.mark.asyncio
+async def test_capture_appends_log_line():
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path == "/capture":
+            return httpx.Response(200, json={"id": 14, "kind": "inbox"})
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "pay rent"
+        await inp.action_submit()
+        await pilot.pause()
+    c.close()
+    assert ("POST", "/capture") in calls
+
+
+@pytest.mark.asyncio
+async def test_unknown_command_does_not_call_backend():
+    calls: list[str] = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/wat"
+        await inp.action_submit()
+        await pilot.pause()
+    c.close()
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_capture_runs_off_ui_thread():
+    """Slow backend must not block the UI input handler."""
+    import threading
+    import time
+
+    ui_thread = threading.get_ident()
+    seen_threads: list[int] = []
+    release = threading.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_threads.append(threading.get_ident())
+        # Block until the test releases us — simulates a slow backend.
+        release.wait(timeout=2.0)
+        return httpx.Response(200, json={"id": 1, "kind": "inbox"})
+
+    from textual.widgets import Input
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "slow capture"
+        # If the call ran on the UI thread this submit would block ~2s.
+        t0 = time.monotonic()
+        await inp.action_submit()
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, "submit blocked the UI thread"
+        # Now let the worker complete.
+        release.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    c.close()
+    assert seen_threads, "backend was never called"
+    assert ui_thread not in seen_threads, "HTTP ran on the UI thread"
+
+
+@pytest.mark.asyncio
+async def test_search_renders_candidates_payload():
+    """Backend SearchResponse uses 'candidates', not 'items'."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/search":
+            return httpx.Response(
+                200,
+                json={
+                    "query": "dent",
+                    "candidates": [
+                        {"type": "task", "id": 7, "title": "call dentist", "score": 0.9},
+                        {"type": "event", "id": 12, "title": "dentist visit", "score": 0.7},
+                    ],
+                    "ambiguous": False,
+                    "max_candidates": 5,
+                    "ambiguity_threshold": 0.15,
+                },
+            )
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/search dent"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        listing = app.state.last_listing
+        assert listing is not None
+        assert listing.kind == "search"
+        ids = [it.id for it in listing.items]
+        assert ids == [7, 12]
+        assert listing.items[0].kind == "task"
+    c.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_number_after_listing_is_pick_not_capture():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/tasks":
+            return httpx.Response(
+                200, json=[{"id": 11, "title": "milk"}, {"id": 12, "title": "rent"}]
+            )
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/tasks"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        # Bare number after a listing must not get captured.
+        inp.value = "2"
+        await inp.action_submit()
+        await pilot.pause()
+        assert app.state.last_selection is not None
+        assert app.state.last_selection.id == 12
+    c.close()
+    assert "/capture" not in calls
+
+
+@pytest.mark.asyncio
+async def test_non_slash_pick_after_listing_is_pick_not_capture():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/search":
+            return httpx.Response(
+                200,
+                json={
+                    "query": "milk",
+                    "candidates": [
+                        {"type": "task", "id": 5, "title": "buy milk", "score": 0.9}
+                    ],
+                    "ambiguous": False,
+                    "max_candidates": 5,
+                    "ambiguity_threshold": 0.15,
+                },
+            )
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/search milk"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        inp.value = "pick 1"
+        await inp.action_submit()
+        await pilot.pause()
+        assert app.state.last_selection is not None
+        assert app.state.last_selection.id == 5
+    c.close()
+    assert "/capture" not in calls
+
+
+@pytest.mark.asyncio
+async def test_done_does_not_label_task_id_as_action_id():
+    """`/tasks/{id}/done` returns a TaskResponse with `id` (the task id),
+    not an action id. The Log line must not claim it as `action #N`."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path == "/tasks":
+            return httpx.Response(200, json=[{"id": 11, "title": "milk"}])
+        if request.url.path == "/tasks/11/done":
+            return httpx.Response(
+                200, json={"id": 11, "title": "milk", "status": "done"}
+            )
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input, RichLog
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/tasks"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        inp.value = "/done 1"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        log = app.query_one("#log", RichLog)
+        text = "\n".join(str(line) for line in log.lines)
+    c.close()
+    assert ("POST", "/tasks/11/done") in calls
+    assert "task #11 done" in text
+    # Must not mislabel the task id as an action id.
+    assert "action #11" not in text
+    assert "action #" not in text or "action #11" not in text
+
+
+@pytest.mark.asyncio
+async def test_resolve_passes_adhdman_timezone(monkeypatch):
+    monkeypatch.setenv("ADHDMAN_TIMEZONE", "America/Los_Angeles")
+    bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/resolve":
+            bodies.append(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "resolved": {
+                        "starts_at": "2026-05-17T15:00:00-07:00",
+                        "ends_at": None,
+                        "kind": "instant",
+                        "confidence": 0.9,
+                        "source": "test",
+                    },
+                    "alternates": [],
+                },
+            )
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/resolve tomorrow 3pm"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    c.close()
+    assert bodies, "/resolve was not called"
+    import json as _json
+    body = _json.loads(bodies[0])
+    assert body == {"text": "tomorrow 3pm", "tz": "America/Los_Angeles"}
