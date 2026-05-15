@@ -27,6 +27,26 @@ def _inbox_item_from_row(row: sqlite3.Row) -> InboxItemResponse:
     )
 
 
+def list_inbox_items(
+    status: str = "open", settings: Settings | None = None
+) -> list[InboxItemResponse]:
+    """Return inbox items with the requested status, ordered oldest first."""
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, text, status, created_at, updated_at
+            FROM inbox_items
+            WHERE status = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (status,),
+        ).fetchall()
+
+    return [_inbox_item_from_row(row) for row in rows]
+
+
 def capture_to_inbox(text: str, settings: Settings | None = None) -> InboxItemResponse:
     """Store normalized text as an open inbox item and log the capture action."""
 

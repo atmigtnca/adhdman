@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from app.config import get_settings
 from app.db import init_db
-from app.repositories import capture_to_inbox
+from app.repositories import capture_to_inbox, list_inbox_items
 from app.schemas import CaptureRequest, InboxItemResponse
 
 settings = get_settings()
@@ -29,6 +29,13 @@ def health() -> dict[str, str]:
     """Health check endpoint used by local and Docker verification."""
 
     return {"status": "ok"}
+
+
+@app.get("/inbox", response_model=list[InboxItemResponse])
+def get_inbox() -> list[InboxItemResponse]:
+    """List open inbox items oldest first."""
+
+    return list_inbox_items(settings=settings)
 
 
 @app.post("/capture", response_model=InboxItemResponse, status_code=201)
