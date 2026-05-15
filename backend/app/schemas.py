@@ -21,6 +21,43 @@ class CaptureRequest(BaseModel):
         return normalized
 
 
+class CaptureClassificationCreated(BaseModel):
+    """Pointer to a row created by the classification pass on capture."""
+
+    type: Literal["task", "event"]
+    id: int
+
+
+class CaptureClassification(BaseModel):
+    """Classification metadata returned alongside a capture response."""
+
+    intent: Literal["task", "event", "inbox"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    source: Literal["rules", "llm", "repair", "fallback"]
+    title: str | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+    reason: str | None = None
+    created: CaptureClassificationCreated | None = None
+
+
+class CaptureResponse(BaseModel):
+    """Response for POST /capture: original inbox row plus classification.
+
+    The inbox row fields (``id``, ``text``, ``status``, ``created_at``,
+    ``updated_at``) are kept alongside ``inbox_item_id`` so Phase 1 clients keep
+    working when ``CLASSIFY_ENABLED`` is False.
+    """
+
+    id: int
+    inbox_item_id: int
+    text: str
+    status: str
+    created_at: str
+    updated_at: str
+    classification: CaptureClassification
+
+
 class ClassifyResponse(BaseModel):
     """Response schema for the read-only /classify endpoint.
 

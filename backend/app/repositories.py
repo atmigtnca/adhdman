@@ -4,9 +4,18 @@ from datetime import UTC, datetime
 import json
 import sqlite3
 
+from app.classification import ClassificationSource, ClassifierOutput
 from app.config import Settings
 from app.db import get_connection
-from app.schemas import InboxItemResponse, TaskResponse, TodayOneThingResponse, TodayResponse
+from app.schemas import (
+    CaptureClassification,
+    CaptureClassificationCreated,
+    CaptureResponse,
+    InboxItemResponse,
+    TaskResponse,
+    TodayOneThingResponse,
+    TodayResponse,
+)
 
 
 class InboxItemNotFoundError(Exception):
@@ -169,6 +178,195 @@ def capture_to_inbox(text: str, settings: Settings | None = None) -> InboxItemRe
         )
 
     return item
+
+
+def apply_classification_to_inbox_item(
+    inbox_item: InboxItemResponse,
+    classification: ClassifierOutput,
+    source: ClassificationSource,
+    settings: Settings | None = None,
+    *,
+    persist_classification: bool = True,
+) -> CaptureResponse:
+    """Apply a classification outcome to an already-persisted open inbox item.
+
+    The inbox row and its ``capture`` action must already exist (written by
+    ``capture_to_inbox``) so the capture-first guarantee survives any failure
+    inside classification or the LLM provider. When ``persist_classification``
+    is False (kill switch), no classify_* row is written and the inbox row is
+    returned untouched.
+    """
+
+    inbox_item_id = inbox_item.id
+    final_inbox = inbox_item
+    timestamp = _now_iso()
+    created: CaptureClassificationCreated | None = None
+
+    if persist_classification:
+        with get_connection(settings) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            current_row = connection.execute(
+                """
+                SELECT id, text, status, created_at, updated_at
+                FROM inbox_items
+                WHERE id = ?
+                """,
+                (inbox_item_id,),
+            ).fetchone()
+            if current_row is None:
+                raise InboxItemNotFoundError(
+                    f"inbox item {inbox_item_id} not found"
+                )
+            if current_row["status"] != "open":
+                raise InboxItemNotOpenError(
+                    f"inbox item {inbox_item_id} is not open"
+                )
+
+            if classification.intent == "task":
+                task_cursor = connection.execute(
+                    """
+                    INSERT INTO tasks (title, status, source_inbox_item_id, created_at, updated_at)
+                    VALUES (?, 'open', ?, ?, ?)
+                    """,
+                    (
+                        classification.title or inbox_item.text,
+                        inbox_item_id,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                task_id = task_cursor.lastrowid
+                connection.execute(
+                    """
+                    UPDATE inbox_items
+                    SET status = 'promoted',
+                        updated_at = ?,
+                        promoted_to_type = 'task',
+                        promoted_to_id = ?
+                    WHERE id = ?
+                    """,
+                    (timestamp, task_id, inbox_item_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+                    VALUES ('classify_task', 'task', ?, NULL, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        json.dumps(
+                            {
+                                "inbox_item_id": inbox_item_id,
+                                "task_id": task_id,
+                                "title": classification.title,
+                                "source": source,
+                                "confidence": classification.confidence,
+                            }
+                        ),
+                        timestamp,
+                    ),
+                )
+                created = CaptureClassificationCreated(type="task", id=task_id)
+            elif classification.intent == "event":
+                event_cursor = connection.execute(
+                    """
+                    INSERT INTO events (title, starts_at, ends_at, source_inbox_item_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        classification.title or inbox_item.text,
+                        classification.starts_at,
+                        classification.ends_at,
+                        inbox_item_id,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                event_id = event_cursor.lastrowid
+                connection.execute(
+                    """
+                    UPDATE inbox_items
+                    SET status = 'promoted',
+                        updated_at = ?,
+                        promoted_to_type = 'event',
+                        promoted_to_id = ?
+                    WHERE id = ?
+                    """,
+                    (timestamp, event_id, inbox_item_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+                    VALUES ('classify_event', 'event', ?, NULL, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        json.dumps(
+                            {
+                                "inbox_item_id": inbox_item_id,
+                                "event_id": event_id,
+                                "title": classification.title,
+                                "starts_at": classification.starts_at,
+                                "ends_at": classification.ends_at,
+                                "source": source,
+                                "confidence": classification.confidence,
+                            }
+                        ),
+                        timestamp,
+                    ),
+                )
+                created = CaptureClassificationCreated(type="event", id=event_id)
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO actions (action_type, target_type, target_id, before_json, after_json, created_at)
+                    VALUES ('classify_inbox_fallback', 'inbox_item', ?, NULL, ?, ?)
+                    """,
+                    (
+                        inbox_item_id,
+                        json.dumps(
+                            {
+                                "inbox_item_id": inbox_item_id,
+                                "source": source,
+                                "confidence": classification.confidence,
+                                "reason": classification.reason,
+                            }
+                        ),
+                        timestamp,
+                    ),
+                )
+
+            updated_row = connection.execute(
+                """
+                SELECT id, text, status, created_at, updated_at
+                FROM inbox_items
+                WHERE id = ?
+                """,
+                (inbox_item_id,),
+            ).fetchone()
+            if updated_row is None:
+                raise RuntimeError("failed to reload inbox item after classification")
+            final_inbox = _inbox_item_from_row(updated_row)
+
+    return CaptureResponse(
+        id=final_inbox.id,
+        inbox_item_id=final_inbox.id,
+        text=final_inbox.text,
+        status=final_inbox.status,
+        created_at=final_inbox.created_at,
+        updated_at=final_inbox.updated_at,
+        classification=CaptureClassification(
+            intent=classification.intent,
+            confidence=classification.confidence,
+            source=source,
+            title=classification.title,
+            starts_at=classification.starts_at,
+            ends_at=classification.ends_at,
+            reason=classification.reason,
+            created=created,
+        ),
+    )
 
 
 def promote_inbox_item_to_task(

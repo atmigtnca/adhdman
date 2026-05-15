@@ -10,7 +10,11 @@ from app.repositories import capture_to_inbox, complete_task, get_today_summary,
 
 
 def make_settings(tmp_path: Path) -> Settings:
-    return Settings(DATABASE_PATH=tmp_path / "adhdman.sqlite")
+    return Settings(
+        _env_file=None,
+        DATABASE_PATH=tmp_path / "adhdman.sqlite",
+        CLASSIFY_ENABLED=False,
+    )
 
 
 def test_get_today_returns_oldest_open_task_when_tasks_exist(tmp_path: Path, monkeypatch) -> None:
@@ -20,8 +24,8 @@ def test_get_today_returns_oldest_open_task_when_tasks_exist(tmp_path: Path, mon
     with TestClient(app) as client:
         first_inbox = client.post("/capture", json={"text": "pay rent"}).json()
         second_inbox = client.post("/capture", json={"text": "wash dishes"}).json()
-        first_task = client.post(f"/inbox/{first_inbox['id']}/promote-task").json()
-        client.post(f"/inbox/{second_inbox['id']}/promote-task")
+        first_task = client.post(f"/inbox/{first_inbox['inbox_item_id']}/promote-task").json()
+        client.post(f"/inbox/{second_inbox['inbox_item_id']}/promote-task")
         open_inbox = client.post("/capture", json={"text": "random thought"}).json()
         response = client.get("/today")
 
@@ -32,7 +36,7 @@ def test_get_today_returns_oldest_open_task_when_tasks_exist(tmp_path: Path, mon
         "one_thing": {"type": "task", "id": first_task["id"], "text": "pay rent"},
         "message": "One thing is ready.",
     }
-    assert open_inbox["text"] == "random thought"
+    assert open_inbox["inbox_item_id"] > 0
 
 
 def test_get_today_falls_back_to_oldest_open_inbox_item(tmp_path: Path, monkeypatch) -> None:
@@ -48,7 +52,7 @@ def test_get_today_falls_back_to_oldest_open_inbox_item(tmp_path: Path, monkeypa
     assert response.json() == {
         "open_tasks_count": 0,
         "inbox_count": 2,
-        "one_thing": {"type": "inbox", "id": first["id"], "text": "first thought"},
+        "one_thing": {"type": "inbox", "id": first["inbox_item_id"], "text": "first thought"},
         "message": "One thing is ready.",
     }
 

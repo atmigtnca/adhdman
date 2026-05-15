@@ -11,7 +11,11 @@ from app.repositories import capture_to_inbox
 
 
 def make_settings(tmp_path: Path) -> Settings:
-    return Settings(DATABASE_PATH=tmp_path / "adhdman.sqlite")
+    return Settings(
+        _env_file=None,
+        DATABASE_PATH=tmp_path / "adhdman.sqlite",
+        CLASSIFY_ENABLED=False,
+    )
 
 
 def test_get_inbox_returns_captured_open_items_oldest_first(tmp_path: Path, monkeypatch) -> None:
@@ -19,12 +23,19 @@ def test_get_inbox_returns_captured_open_items_oldest_first(tmp_path: Path, monk
     monkeypatch.setattr(main_module, "settings", settings)
 
     with TestClient(app) as client:
-        first = client.post("/capture", json={"text": "first thought"}).json()
-        second = client.post("/capture", json={"text": "second thought"}).json()
+        first_id = client.post("/capture", json={"text": "first thought"}).json()[
+            "inbox_item_id"
+        ]
+        second_id = client.post("/capture", json={"text": "second thought"}).json()[
+            "inbox_item_id"
+        ]
         response = client.get("/inbox")
 
     assert response.status_code == 200
-    assert response.json() == [first, second]
+    rows = response.json()
+    assert [row["id"] for row in rows] == [first_id, second_id]
+    assert [row["text"] for row in rows] == ["first thought", "second thought"]
+    assert all(row["status"] == "open" for row in rows)
 
 
 def test_get_inbox_excludes_promoted_items_by_default(tmp_path: Path, monkeypatch) -> None:
@@ -32,8 +43,12 @@ def test_get_inbox_excludes_promoted_items_by_default(tmp_path: Path, monkeypatc
     monkeypatch.setattr(main_module, "settings", settings)
 
     with TestClient(app) as client:
-        promoted = client.post("/capture", json={"text": "already promoted"}).json()
-        open_item = client.post("/capture", json={"text": "still open"}).json()
+        promoted_id = client.post("/capture", json={"text": "already promoted"}).json()[
+            "inbox_item_id"
+        ]
+        open_id = client.post("/capture", json={"text": "still open"}).json()[
+            "inbox_item_id"
+        ]
 
         with sqlite3.connect(settings.resolved_database_path) as connection:
             connection.execute(
@@ -42,13 +57,14 @@ def test_get_inbox_excludes_promoted_items_by_default(tmp_path: Path, monkeypatc
                 SET status = 'promoted', promoted_to_type = 'task', promoted_to_id = 1
                 WHERE id = ?
                 """,
-                (promoted["id"],),
+                (promoted_id,),
             )
 
         response = client.get("/inbox")
 
     assert response.status_code == 200
-    assert response.json() == [open_item]
+    rows = response.json()
+    assert [row["id"] for row in rows] == [open_id]
 
 
 def test_list_inbox_items_repository_defaults_to_open_oldest_first(tmp_path: Path) -> None:

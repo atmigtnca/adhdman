@@ -11,12 +11,16 @@ from app.repositories import capture_to_inbox, complete_task, list_tasks, promot
 
 
 def make_settings(tmp_path: Path) -> Settings:
-    return Settings(DATABASE_PATH=tmp_path / "adhdman.sqlite")
+    return Settings(
+        _env_file=None,
+        DATABASE_PATH=tmp_path / "adhdman.sqlite",
+        CLASSIFY_ENABLED=False,
+    )
 
 
 def create_task_via_api(client: TestClient, text: str) -> dict:
     inbox_item = client.post("/capture", json={"text": text}).json()
-    response = client.post(f"/inbox/{inbox_item['id']}/promote-task")
+    response = client.post(f"/inbox/{inbox_item['inbox_item_id']}/promote-task")
     assert response.status_code == 201
     return response.json()
 

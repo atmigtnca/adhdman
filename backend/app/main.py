@@ -15,6 +15,7 @@ from app.repositories import (
     InboxItemNotOpenError,
     TaskNotFoundError,
     TaskNotOpenError,
+    apply_classification_to_inbox_item,
     capture_to_inbox,
     complete_task,
     get_today_summary,
@@ -24,6 +25,7 @@ from app.repositories import (
 )
 from app.schemas import (
     CaptureRequest,
+    CaptureResponse,
     ClassifyResponse,
     InboxItemResponse,
     TaskResponse,
@@ -58,13 +60,6 @@ def get_inbox() -> list[InboxItemResponse]:
     return list_inbox_items(settings=settings)
 
 
-@app.post("/capture", response_model=InboxItemResponse, status_code=201)
-def capture(request: CaptureRequest) -> InboxItemResponse:
-    """Capture free-form text into the inbox."""
-
-    return capture_to_inbox(request.text, settings)
-
-
 def get_llm_provider() -> LLMProvider | None:
     """Return the production LLM provider, or None when no key is configured.
 
@@ -75,6 +70,34 @@ def get_llm_provider() -> LLMProvider | None:
     if not settings.openrouter_api_key:
         return None
     return OpenRouterProvider(settings)
+
+
+@app.post("/capture", response_model=CaptureResponse, status_code=201)
+def capture(
+    request: CaptureRequest,
+    provider: LLMProvider | None = Depends(get_llm_provider),
+) -> CaptureResponse:
+    """Capture free-form text into the inbox and run the classification pipeline.
+
+    The original text is always stored as an inbox row first so the capture-first
+    guarantee from Phase 1 is preserved. When ``CLASSIFY_ENABLED`` is False the
+    endpoint behaves like Phase 1: a single inbox row plus a single ``capture``
+    action are written; no classify_* action is logged.
+    """
+
+    inbox_item = capture_to_inbox(request.text, settings)
+    try:
+        result = classify(request.text, settings=settings, provider=provider)
+    except EmptyTextError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return apply_classification_to_inbox_item(
+        inbox_item,
+        result.output,
+        result.source,
+        settings,
+        persist_classification=settings.classify_enabled,
+    )
 
 
 @app.post("/classify", response_model=ClassifyResponse)
