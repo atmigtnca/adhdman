@@ -92,11 +92,38 @@ def get_connection(settings: Settings | None = None) -> sqlite3.Connection:
     return connection
 
 
+PHASE_3_ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("tasks", "due_at", "ALTER TABLE tasks ADD COLUMN due_at TEXT"),
+    (
+        "events",
+        "status",
+        "ALTER TABLE events ADD COLUMN status TEXT NOT NULL DEFAULT 'open'",
+    ),
+    ("actions", "undone_at", "ALTER TABLE actions ADD COLUMN undone_at TEXT"),
+)
+
+
+def _existing_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row[1] for row in rows}
+
+
+def _apply_additive_columns(connection: sqlite3.Connection) -> None:
+    for table, column, statement in PHASE_3_ADDITIVE_COLUMNS:
+        if column not in _existing_columns(connection, table):
+            connection.execute(statement)
+
+
 def init_db(settings: Settings | None = None) -> Path:
-    """Initialize the Phase 1 SQLite schema and return the database path."""
+    """Initialize the SQLite schema and return the database path.
+
+    Creates Phase 1/2 tables and applies additive Phase 3 columns idempotently,
+    so existing databases gain new columns without losing data.
+    """
 
     database_path = ensure_database_parent(settings)
     with get_connection(settings) as connection:
         for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
+        _apply_additive_columns(connection)
     return database_path

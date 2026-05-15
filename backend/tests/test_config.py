@@ -23,6 +23,23 @@ def test_database_path_resolves_absolute() -> None:
     assert get_database_path(settings).name == "test.sqlite"
 
 
+def test_phase_3_settings_have_safe_defaults(monkeypatch) -> None:
+    for name in (
+        "LOCAL_TIMEZONE",
+        "SEARCH_MAX_CANDIDATES",
+        "SEARCH_AMBIGUITY_THRESHOLD",
+        "UNDO_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.local_timezone == "UTC"
+    assert settings.search_max_candidates == 5
+    assert settings.search_ambiguity_threshold == 0.15
+    assert settings.undo_enabled is True
+
+
 def test_ensure_database_parent_creates_directory(tmp_path: Path) -> None:
     db_path = tmp_path / "nested" / "adhdman.sqlite"
     settings = Settings(DATABASE_PATH=str(db_path))
