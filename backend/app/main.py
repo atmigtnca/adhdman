@@ -46,12 +46,15 @@ from app.schemas import (
     ResolveRequest,
     ResolveResponse,
     ResolveResultSchema,
+    SearchRequest,
+    SearchResponse,
     TaskMutationResponse,
     TaskResponse,
     TaskUpdateRequest,
     TodayResponse,
     UndoResponse,
 )
+from app.search import search_candidates
 from app.undo import (
     ActionAlreadyUndoneError,
     ActionConflictError,
@@ -232,6 +235,20 @@ def resolve_endpoint(request: ResolveRequest) -> ResolveResponse:
         ),
         alternates=list(result.alternates),
     )
+
+
+@app.post("/search", response_model=SearchResponse)
+def search_endpoint(request: SearchRequest) -> SearchResponse:
+    """Return scored candidates across tasks, events, and inbox items.
+
+    Read-only by design: no row is mutated. Callers pick a specific id from the
+    response and invoke the typed ``PATCH``/``DELETE`` endpoint to actually
+    change a row. This is the single rule that prevents free-form references
+    like "edit the dentist thing" from silently editing the wrong row.
+    """
+
+    result = search_candidates(request.query, settings)
+    return SearchResponse(**result)
 
 
 @app.post("/tasks/{task_id}/done", response_model=TaskResponse)

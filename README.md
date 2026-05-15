@@ -119,6 +119,69 @@ Setting `CLASSIFY_ENABLED=false` reverts capture to Phase 1 semantics: every `PO
 
 The LLM call is initiated by the local process only. ADHDman remains local-first: bind to `127.0.0.1`, do not expose it to the public internet, and treat the OpenRouter key as a local secret.
 
+## Phase 3 API examples
+
+Phase 3 makes captured rows safely editable, deletable, and reversible.
+
+```bash
+# Resolve a free-form datetime phrase (read-only)
+curl -s -X POST http://127.0.0.1:8000/resolve \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"tomorrow 3pm","tz":"America/Los_Angeles"}'
+
+# Edit a task / event by id (logs a full before/after snapshot)
+curl -s -X PATCH http://127.0.0.1:8000/tasks/1 \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"call dentist","due_at":"2026-05-20T10:00"}'
+curl -s -X PATCH http://127.0.0.1:8000/events/1 \
+  -H 'Content-Type: application/json' \
+  -d '{"starts_at":"2026-06-02T10:00"}'
+
+# Soft-delete (recoverable via undo)
+curl -s -X DELETE http://127.0.0.1:8000/tasks/1
+curl -s -X DELETE http://127.0.0.1:8000/events/1
+
+# Find candidates by free-form text (READ-ONLY; never mutates)
+curl -s -X POST http://127.0.0.1:8000/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"dentist"}'
+
+# Reverse a specific action or the most recent one
+curl -s -X POST http://127.0.0.1:8000/undo/12
+curl -s -X POST http://127.0.0.1:8000/undo/latest
+```
+
+`POST /search` is the safe candidate-selection layer. It returns up to
+`SEARCH_MAX_CANDIDATES` (default 5) scored candidates across tasks, events, and
+open inbox items. Soft-deleted rows are excluded. The response also reports an
+`ambiguous` flag when the top two candidates' scores are within
+`SEARCH_AMBIGUITY_THRESHOLD` of each other, so callers can disambiguate before
+calling a mutating endpoint. Mutations never accept free-form text as a target
+selector — the caller must pass an explicit id to `PATCH`/`DELETE`.
+
+```json
+{
+  "query": "dentist",
+  "candidates": [
+    { "type": "event", "id": 12, "title": "dentist checkup", "starts_at": "2026-05-20T10:00:00-07:00", "score": 0.88 },
+    { "type": "task",  "id":  7, "title": "call dentist",     "starts_at": null,                       "score": 0.61 }
+  ],
+  "ambiguous": false,
+  "max_candidates": 5,
+  "ambiguity_threshold": 0.15
+}
+```
+
+Phase 3 configuration (placeholders only; never commit real values):
+
+```bash
+# .env (local only)
+LOCAL_TIMEZONE=UTC
+SEARCH_MAX_CANDIDATES=5
+SEARCH_AMBIGUITY_THRESHOLD=0.15
+UNDO_ENABLED=true
+```
+
 ## Development
 
 ```bash

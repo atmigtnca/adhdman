@@ -205,6 +205,51 @@ class ResolveResponse(BaseModel):
     alternates: list[str]
 
 
+class SearchRequest(BaseModel):
+    """Request body for POST /search.
+
+    Read-only. The endpoint never mutates rows; callers must follow up with an
+    explicit PATCH/DELETE by id once they pick a candidate.
+    """
+
+    query: str = Field(min_length=1, max_length=500)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("query")
+    @classmethod
+    def _normalize_query(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("query must not be empty")
+        return normalized
+
+
+class SearchCandidate(BaseModel):
+    """A single scored candidate returned by /search."""
+
+    type: Literal["task", "event", "inbox"]
+    id: int
+    title: str
+    starts_at: str | None = None
+    score: float = Field(ge=0.0, le=1.0)
+
+
+class SearchResponse(BaseModel):
+    """Scored candidates plus ambiguity metadata.
+
+    ``ambiguous`` is True when the top two candidates' scores are within
+    ``ambiguity_threshold`` — a hint that the caller should disambiguate before
+    invoking a mutating endpoint.
+    """
+
+    query: str
+    candidates: list[SearchCandidate]
+    ambiguous: bool
+    max_candidates: int
+    ambiguity_threshold: float
+
+
 class UndoResponse(BaseModel):
     """Response for POST /undo/{id} and POST /undo/latest.
 
