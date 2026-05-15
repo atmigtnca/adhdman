@@ -115,9 +115,28 @@ def test_static_files_have_no_mutation_endpoint_strings() -> None:
 
 
 def test_static_files_have_no_auth_or_user_concepts() -> None:
-    """The web shell must not introduce auth, sessions, or user_id."""
+    """The web shell must not introduce auth or user concepts.
 
-    forbidden = ("user_id", "login", "logout", "session", "password", "cookie", "csrf", "token")
+    Phase 6 introduces local, non-auth "focus sessions" and "body-double
+    sessions" surfaced read-only on the dashboard, so the bare word ``session``
+    is no longer forbidden. The forbidden list targets auth-shaped tokens
+    instead (``session_id``, ``sessionstorage``, ``set-cookie``, etc.).
+    """
+
+    forbidden = (
+        "user_id",
+        "login",
+        "logout",
+        "password",
+        "cookie",
+        "csrf",
+        "token",
+        "session_id",
+        "sessionstorage",
+        "set-cookie",
+        "authorization",
+        "auth_token",
+    )
     for name, source in ALL_STATIC_SOURCES.items():
         lowered = source.lower()
         for needle in forbidden:

@@ -143,8 +143,90 @@
     });
   }
 
+  function formatSeconds(total) {
+    if (total == null || isNaN(total)) {
+      return "";
+    }
+    const seconds = Math.max(0, Math.round(total));
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    if (minutes === 0) {
+      return seconds + "s";
+    }
+    if (remainder === 0) {
+      return minutes + "m";
+    }
+    return minutes + "m " + remainder + "s";
+  }
+
+  function renderFocus(focus) {
+    const message = document.getElementById("focus-message");
+    const sessionEl = document.getElementById("focus-session");
+    const bodyDoubleEl = document.getElementById("focus-body-double");
+    const survivalTag = document.getElementById("survival-tag");
+
+    const isSurvival = !!(focus && focus.survival);
+    if (survivalTag) {
+      if (isSurvival) {
+        survivalTag.textContent = "Survival mode";
+        survivalTag.hidden = false;
+      } else {
+        survivalTag.textContent = "";
+        survivalTag.hidden = true;
+      }
+    }
+
+    const session = focus && focus.session;
+    const target = focus && focus.target;
+    if (session) {
+      sessionEl.hidden = false;
+      const targetText = target && target.title
+        ? target.type + " · " + target.title
+        : (session.target_type || "no target");
+      document.getElementById("focus-target").textContent = targetText;
+      document.getElementById("focus-started").textContent = session.started_at || "";
+      const noteLabel = document.getElementById("focus-note-label");
+      const noteEl = document.getElementById("focus-note");
+      if (session.note) {
+        noteLabel.hidden = false;
+        noteEl.hidden = false;
+        noteEl.textContent = session.note;
+      } else {
+        noteLabel.hidden = true;
+        noteEl.hidden = true;
+        noteEl.textContent = "";
+      }
+    } else {
+      sessionEl.hidden = true;
+    }
+
+    const bodyDouble = focus && focus.body_double;
+    if (bodyDouble) {
+      bodyDoubleEl.hidden = false;
+      const cadence = formatSeconds(bodyDouble.interval_seconds);
+      document.getElementById("body-double-cadence").textContent = cadence
+        ? "check in every " + cadence
+        : "running";
+      document.getElementById("body-double-last").textContent =
+        bodyDouble.last_check_in_at || "no check-in yet";
+    } else {
+      bodyDoubleEl.hidden = true;
+    }
+
+    if (!session && !bodyDouble) {
+      message.textContent = isSurvival
+        ? "Survival mode is on. No focus or body-double session right now."
+        : "No focus session right now. That is fine.";
+    } else if (isSurvival) {
+      message.textContent = "Survival mode is on.";
+    } else {
+      message.textContent = "";
+    }
+  }
+
   function render(payload) {
     renderNow(payload.today);
+    renderFocus(payload.focus);
     renderInbox(payload.inbox);
     renderTasks(payload.tasks);
     renderEvents(payload.events);

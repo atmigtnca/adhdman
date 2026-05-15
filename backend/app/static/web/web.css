@@ -199,3 +199,54 @@ main {
 .week-day li {
   padding: 0.2rem 0;
 }
+
+.survival-tag {
+  grid-column: 1 / -1;
+  margin: 0.25rem 0 0;
+  padding: 0.2rem 0.6rem;
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  justify-self: start;
+  font-weight: 600;
+}
+
+.survival-tag[hidden] {
+  display: none;
+}
+
+.focus-message {
+  margin: 0.1rem 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.focus-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0.3rem 0;
+  font-size: 0.9rem;
+}
+
+.focus-details[hidden] {
+  display: none;
+}
+
+.focus-details dt {
+  color: var(--muted);
+}
+
+.focus-details dd {
+  margin: 0;
+}
+
+.focus-hint {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}

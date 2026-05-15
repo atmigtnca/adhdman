@@ -11,6 +11,7 @@
       <h1>ADHDman Web Memory</h1>
       <p class="subtitle">local read-only dashboard</p>
       <p class="badge" aria-label="read only">Read-only</p>
+      <p id="survival-tag" class="survival-tag" hidden></p>
       <button id="refresh" type="button" class="refresh">Refresh</button>
       <p id="status" class="status" role="status"></p>
     </header>
@@ -20,6 +21,25 @@
         <p id="now-message" class="now-message"></p>
         <p id="now-one-thing" class="now-one-thing"></p>
         <ul id="now-counts" class="counts"></ul>
+      </section>
+      <section id="section-focus" class="card">
+        <h2>Focus</h2>
+        <p id="focus-message" class="focus-message"></p>
+        <dl id="focus-session" class="focus-details" hidden>
+          <dt>Working on</dt>
+          <dd id="focus-target"></dd>
+          <dt>Started</dt>
+          <dd id="focus-started"></dd>
+          <dt id="focus-note-label" hidden>Note</dt>
+          <dd id="focus-note" hidden></dd>
+        </dl>
+        <dl id="focus-body-double" class="focus-details" hidden>
+          <dt>Body double</dt>
+          <dd id="body-double-cadence"></dd>
+          <dt>Last check-in</dt>
+          <dd id="body-double-last"></dd>
+        </dl>
+        <p class="focus-hint">Starts and stops happen from the TUI or API.</p>
       </section>
       <section id="section-inbox" class="card">
         <h2>Inbox</h2>
