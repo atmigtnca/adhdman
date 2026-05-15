@@ -18,6 +18,8 @@ from app.llm.base import LLMProvider
 from app.llm.openrouter import OpenRouterProvider
 from app.repositories import (
     EventNotFoundError,
+    FocusSessionConflictError,
+    FocusTargetNotFoundError,
     InboxItemNotFoundError,
     InboxItemNotOpenError,
     InvalidUpdateError,
@@ -28,6 +30,7 @@ from app.repositories import (
     complete_task,
     delete_event as delete_event_repo,
     delete_task as delete_task_repo,
+    get_active_focus_with_target,
     get_dashboard,
     get_event as get_event_repo,
     get_task as get_task_repo,
@@ -36,6 +39,8 @@ from app.repositories import (
     list_inbox_items,
     list_tasks,
     promote_inbox_item_to_task,
+    start_focus_session as start_focus_session_repo,
+    stop_focus_session as stop_focus_session_repo,
     update_event as update_event_repo,
     update_task as update_task_repo,
 )
@@ -47,6 +52,9 @@ from app.schemas import (
     EventMutationResponse,
     EventResponse,
     EventUpdateRequest,
+    FocusConflictResponse,
+    FocusCurrentResponse,
+    FocusStartRequest,
     InboxItemResponse,
     ResolveRequest,
     ResolveResponse,
@@ -59,6 +67,7 @@ from app.schemas import (
     TodayResponse,
     UndoResponse,
 )
+from app import copy as copy_strings
 from app.search import search_candidates
 from app.undo import (
     ActionAlreadyUndoneError,
@@ -367,6 +376,52 @@ def soft_delete_event(event_id: int) -> EventMutationResponse:
     except EventNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return EventMutationResponse(event=event, action_id=action_id)
+
+
+@app.get("/focus/current", response_model=FocusCurrentResponse)
+def focus_current() -> FocusCurrentResponse:
+    """Return the active focus session (kind=focus), if any, with target."""
+
+    result = get_active_focus_with_target("focus", settings)
+    if result is None:
+        return FocusCurrentResponse(message=copy_strings.EMPTY_FOCUS)
+    session, target = result
+    return FocusCurrentResponse(
+        session=session,
+        target=target,
+        message="Focus is set." if target is not None else "Focus target is unavailable.",
+    )
+
+
+@app.post("/focus/start", response_model=FocusCurrentResponse, status_code=201)
+def focus_start(request: FocusStartRequest) -> FocusCurrentResponse:
+    """Start (or replace) the single active focus session."""
+
+    try:
+        session, target, _ = start_focus_session_repo(
+            target_type=request.target_type,
+            target_id=request.target_id,
+            note=request.note,
+            replace=request.replace,
+            settings=settings,
+        )
+    except FocusTargetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FocusSessionConflictError as exc:
+        payload = FocusConflictResponse(
+            message=copy_strings.FOCUS_CONFLICT, existing=exc.existing
+        )
+        raise HTTPException(status_code=409, detail=payload.model_dump()) from exc
+
+    return FocusCurrentResponse(session=session, target=target, message="Focus is set.")
+
+
+@app.post("/focus/stop", response_model=FocusCurrentResponse)
+def focus_stop() -> FocusCurrentResponse:
+    """End the active focus session. Idempotent."""
+
+    stop_focus_session_repo(settings)
+    return FocusCurrentResponse(message=copy_strings.EMPTY_FOCUS)
 
 
 @app.post("/undo/latest", response_model=UndoResponse)

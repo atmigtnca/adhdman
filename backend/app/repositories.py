@@ -15,6 +15,8 @@ from app.schemas import (
     DashboardResponse,
     DashboardToday,
     EventResponse,
+    FocusSessionResponse,
+    FocusTarget,
     InboxItemResponse,
     RecentActionResponse,
     TaskResponse,
@@ -51,6 +53,18 @@ class EventNotFoundError(Exception):
 
 class InvalidUpdateError(Exception):
     """Raised when a patch payload is empty or otherwise invalid."""
+
+
+class FocusTargetNotFoundError(Exception):
+    """Raised when a focus target row does not exist or is soft-deleted."""
+
+
+class FocusSessionConflictError(Exception):
+    """Raised when an active focus session already exists and replace is not set."""
+
+    def __init__(self, existing: "FocusSessionResponse") -> None:
+        super().__init__("a focus session is already active")
+        self.existing = existing
 
 
 def _now_iso() -> str:
@@ -732,6 +746,7 @@ def delete_task(
             ),
         )
         action_id = cursor.lastrowid
+        _auto_end_focus_for_target(connection, timestamp, "task", task.id)
 
     return task, action_id
 
@@ -832,6 +847,7 @@ def delete_event(
             ),
         )
         action_id = cursor.lastrowid
+        _auto_end_focus_for_target(connection, timestamp, "event", event.id)
 
     return event, action_id
 
@@ -946,6 +962,305 @@ def list_week_candidates(settings: Settings | None = None) -> list[WeekDay]:
         )
         week.append(WeekDay(date=date_str, items=items))
     return week
+
+
+# ----- Phase 6: focus sessions (one-thing) -----
+
+
+_FOCUS_SELECT = (
+    "SELECT id, kind, target_type, target_id, status, started_at, ended_at, "
+    "interval_seconds, note, last_check_in_at FROM focus_sessions WHERE id = ?"
+)
+
+
+def _focus_session_from_row(row: sqlite3.Row) -> FocusSessionResponse:
+    return FocusSessionResponse(
+        id=row["id"],
+        kind=row["kind"],
+        target_type=row["target_type"],
+        target_id=row["target_id"],
+        status=row["status"],
+        started_at=row["started_at"],
+        ended_at=row["ended_at"],
+        interval_seconds=row["interval_seconds"],
+        note=row["note"],
+        last_check_in_at=row["last_check_in_at"],
+    )
+
+
+def _resolve_focus_target(
+    connection: sqlite3.Connection,
+    target_type: str,
+    target_id: int,
+) -> FocusTarget:
+    """Return a resolved focus target, raising if missing or soft-deleted."""
+
+    if target_type == "task":
+        row = connection.execute(
+            "SELECT id, title, status FROM tasks WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        if row is None or row["status"] == "deleted":
+            raise FocusTargetNotFoundError(f"task {target_id} not found")
+        return FocusTarget(type="task", id=row["id"], title=row["title"])
+
+    if target_type == "event":
+        row = connection.execute(
+            "SELECT id, title, status FROM events WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        if row is None or row["status"] == "deleted":
+            raise FocusTargetNotFoundError(f"event {target_id} not found")
+        return FocusTarget(type="event", id=row["id"], title=row["title"])
+
+    if target_type == "inbox_item":
+        row = connection.execute(
+            "SELECT id, text, status FROM inbox_items WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        if row is None or row["status"] == "deleted":
+            raise FocusTargetNotFoundError(f"inbox_item {target_id} not found")
+        return FocusTarget(type="inbox_item", id=row["id"], title=row["text"])
+
+    raise FocusTargetNotFoundError(f"unknown target_type '{target_type}'")
+
+
+def _auto_end_focus_for_target(
+    connection: sqlite3.Connection,
+    timestamp: str,
+    target_type: str,
+    target_id: int,
+) -> int | None:
+    """End any active focus session pointing at the given (now-deleted) target.
+
+    Writes an ``auto_end_focus`` action so the trail explains the transition.
+    Returns the focus_sessions.id ended, or None if there was nothing to end.
+    Caller must already hold the write transaction.
+    """
+
+    row = connection.execute(
+        """
+        SELECT id, kind, target_type, target_id, status, started_at, ended_at,
+               interval_seconds, note, last_check_in_at
+        FROM focus_sessions
+        WHERE status = 'active' AND target_type = ? AND target_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (target_type, target_id),
+    ).fetchone()
+    if row is None:
+        return None
+    before = _focus_session_from_row(row)
+    connection.execute(
+        "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+        (timestamp, before.id),
+    )
+    updated = connection.execute(_FOCUS_SELECT, (before.id,)).fetchone()
+    after = _focus_session_from_row(updated) if updated is not None else before
+    connection.execute(
+        """
+        INSERT INTO actions
+          (action_type, target_type, target_id, before_json, after_json, created_at)
+        VALUES ('auto_end_focus', 'focus_session', ?, ?, ?, ?)
+        """,
+        (
+            before.id,
+            json.dumps({"focus_session": before.model_dump()}),
+            json.dumps(
+                {
+                    "focus_session": after.model_dump(),
+                    "reason": "target_deleted",
+                    "target_type": target_type,
+                    "target_id": target_id,
+                }
+            ),
+            timestamp,
+        ),
+    )
+    return before.id
+
+
+def _active_focus_row(
+    connection: sqlite3.Connection, kind: str = "focus"
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT id, kind, target_type, target_id, status, started_at, ended_at,
+               interval_seconds, note, last_check_in_at
+        FROM focus_sessions
+        WHERE kind = ? AND status = 'active'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (kind,),
+    ).fetchone()
+
+
+def get_active_focus_session(
+    kind: str = "focus", settings: Settings | None = None
+) -> FocusSessionResponse | None:
+    """Return the single active focus_sessions row of the given kind, if any."""
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        row = _active_focus_row(connection, kind)
+    return _focus_session_from_row(row) if row is not None else None
+
+
+def get_active_focus_with_target(
+    kind: str = "focus", settings: Settings | None = None
+) -> tuple[FocusSessionResponse, FocusTarget | None] | None:
+    """Return the active session plus its resolved target.
+
+    If the active session's target has been deleted out from under it (e.g. a
+    direct DB edit, or a code path that bypasses ``delete_task``/``delete_event``),
+    the session is auto-ended here so the read surface is never stuck pointing
+    at a ghost target. ``None`` is returned in that case.
+    """
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = _active_focus_row(connection, kind)
+        if row is None:
+            return None
+        session = _focus_session_from_row(row)
+        if session.target_type is None or session.target_id is None:
+            return session, None
+        try:
+            target = _resolve_focus_target(
+                connection, session.target_type, session.target_id
+            )
+        except FocusTargetNotFoundError:
+            _auto_end_focus_for_target(
+                connection, _now_iso(), session.target_type, session.target_id
+            )
+            return None
+    return session, target
+
+
+def start_focus_session(
+    target_type: str,
+    target_id: int,
+    note: str | None = None,
+    replace: bool = False,
+    settings: Settings | None = None,
+) -> tuple[FocusSessionResponse, FocusTarget, int]:
+    """Start a single active focus-kind session, with optional replace semantics.
+
+    Returns ``(session, target, action_id)``. Raises ``FocusSessionConflictError``
+    when an active focus session already exists and ``replace`` is False, and
+    ``FocusTargetNotFoundError`` when the target row is missing or soft-deleted.
+
+    TODO(undo): the inverse for ``start_focus`` / ``stop_focus`` / ``replace_focus``
+    actions is not yet wired into ``app.undo``. Action rows are written so the
+    trail stays auditable; undo integration lands in a later slice.
+    """
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        target = _resolve_focus_target(connection, target_type, target_id)
+        existing_row = _active_focus_row(connection, "focus")
+        replaced_existing: FocusSessionResponse | None = None
+        if existing_row is not None:
+            existing = _focus_session_from_row(existing_row)
+            if not replace:
+                raise FocusSessionConflictError(existing)
+            connection.execute(
+                """
+                UPDATE focus_sessions
+                SET status = 'ended', ended_at = ?
+                WHERE id = ?
+                """,
+                (timestamp, existing.id),
+            )
+            replaced_existing = existing
+
+        cursor = connection.execute(
+            """
+            INSERT INTO focus_sessions
+              (kind, target_type, target_id, status, started_at, note)
+            VALUES ('focus', ?, ?, 'active', ?, ?)
+            """,
+            (target.type, target.id, timestamp, note),
+        )
+        session_id = cursor.lastrowid
+        row = connection.execute(_FOCUS_SELECT, (session_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("failed to load focus session after insert")
+        session = _focus_session_from_row(row)
+
+        action_type = "replace_focus" if replaced_existing is not None else "start_focus"
+        before_payload = (
+            {"focus_session": replaced_existing.model_dump()}
+            if replaced_existing is not None
+            else None
+        )
+        after_payload = {
+            "focus_session": session.model_dump(),
+            "target": target.model_dump(),
+        }
+        action_cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES (?, 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                action_type,
+                session.id,
+                json.dumps(before_payload) if before_payload is not None else None,
+                json.dumps(after_payload),
+                timestamp,
+            ),
+        )
+        action_id = action_cursor.lastrowid
+
+    return session, target, action_id
+
+
+def stop_focus_session(
+    settings: Settings | None = None,
+) -> tuple[FocusSessionResponse | None, int | None]:
+    """End the active focus-kind session. Idempotent: returns (None, None) if none.
+
+    TODO(undo): see :func:`start_focus_session`.
+    """
+
+    timestamp = _now_iso()
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN IMMEDIATE")
+        row = _active_focus_row(connection, "focus")
+        if row is None:
+            return None, None
+        before = _focus_session_from_row(row)
+        connection.execute(
+            "UPDATE focus_sessions SET status = 'ended', ended_at = ? WHERE id = ?",
+            (timestamp, before.id),
+        )
+        updated_row = connection.execute(_FOCUS_SELECT, (before.id,)).fetchone()
+        assert updated_row is not None
+        session = _focus_session_from_row(updated_row)
+        cursor = connection.execute(
+            """
+            INSERT INTO actions
+              (action_type, target_type, target_id, before_json, after_json, created_at)
+            VALUES ('stop_focus', 'focus_session', ?, ?, ?, ?)
+            """,
+            (
+                session.id,
+                json.dumps({"focus_session": before.model_dump()}),
+                json.dumps({"focus_session": session.model_dump()}),
+                timestamp,
+            ),
+        )
+        action_id = cursor.lastrowid
+
+    return session, action_id
 
 
 def get_dashboard(
