@@ -1,6 +1,6 @@
 # Phase 1 Capture Core Implementation Plan
 
-> **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task after Seojongho explicitly says "구현 시작" or equivalent.
+> **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task after the project owner explicitly says "start implementation" or equivalent.
 
 **Goal:** Build the smallest reliable ADHDman core that never loses user input: capture every thought into a local inbox, then allow simple promotion into tasks and a minimal "one thing now" summary.
 
