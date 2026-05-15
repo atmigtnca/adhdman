@@ -84,6 +84,18 @@ class InboxItemResponse(BaseModel):
     updated_at: str
 
 
+class EventResponse(BaseModel):
+    """Response schema for an event created by classification."""
+
+    id: int
+    title: str
+    starts_at: str | None
+    ends_at: str | None
+    source_inbox_item_id: int | None
+    created_at: str
+    updated_at: str
+
+
 class TaskResponse(BaseModel):
     """Response schema for a task."""
 

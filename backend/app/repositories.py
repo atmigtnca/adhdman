@@ -11,6 +11,7 @@ from app.schemas import (
     CaptureClassification,
     CaptureClassificationCreated,
     CaptureResponse,
+    EventResponse,
     InboxItemResponse,
     TaskResponse,
     TodayOneThingResponse,
@@ -84,6 +85,38 @@ def list_inbox_items(
         ).fetchall()
 
     return [_inbox_item_from_row(row) for row in rows]
+
+
+def list_events(settings: Settings | None = None) -> list[EventResponse]:
+    """Return events created by classification, ordered by starts_at then id.
+
+    Events without a ``starts_at`` sort after events that have one so the
+    timeline-style view stays readable; ties break on id ascending.
+    """
+
+    with get_connection(settings) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, title, starts_at, ends_at, source_inbox_item_id,
+                   created_at, updated_at
+            FROM events
+            ORDER BY (starts_at IS NULL), starts_at ASC, id ASC
+            """,
+        ).fetchall()
+
+    return [
+        EventResponse(
+            id=row["id"],
+            title=row["title"],
+            starts_at=row["starts_at"],
+            ends_at=row["ends_at"],
+            source_inbox_item_id=row["source_inbox_item_id"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
 
 
 def list_tasks(status: str = "open", settings: Settings | None = None) -> list[TaskResponse]:
@@ -336,6 +369,22 @@ def apply_classification_to_inbox_item(
                         timestamp,
                     ),
                 )
+
+            connection.execute(
+                """
+                INSERT INTO classifications
+                  (inbox_item_id, intent, confidence, source, raw_response, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    inbox_item_id,
+                    classification.intent,
+                    classification.confidence,
+                    source,
+                    json.dumps(classification.model_dump()),
+                    timestamp,
+                ),
+            )
 
             updated_row = connection.execute(
                 """

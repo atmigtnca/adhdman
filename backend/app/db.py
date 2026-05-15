@@ -43,6 +43,18 @@ SCHEMA_STATEMENTS = (
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS classifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      inbox_item_id INTEGER NOT NULL,
+      intent TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      source TEXT NOT NULL,
+      raw_response TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(inbox_item_id) REFERENCES inbox_items(id)
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS actions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       action_type TEXT NOT NULL,

@@ -19,6 +19,7 @@ from app.repositories import (
     capture_to_inbox,
     complete_task,
     get_today_summary,
+    list_events,
     list_inbox_items,
     list_tasks,
     promote_inbox_item_to_task,
@@ -27,6 +28,7 @@ from app.schemas import (
     CaptureRequest,
     CaptureResponse,
     ClassifyResponse,
+    EventResponse,
     InboxItemResponse,
     TaskResponse,
     TodayResponse,
@@ -137,6 +139,13 @@ def promote_inbox_item(inbox_item_id: int) -> TaskResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except InboxItemNotOpenError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/events", response_model=list[EventResponse])
+def get_events() -> list[EventResponse]:
+    """List events created by classification, earliest start first."""
+
+    return list_events(settings=settings)
 
 
 @app.get("/tasks", response_model=list[TaskResponse])
