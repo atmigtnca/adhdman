@@ -27,3 +27,15 @@ class InboxItemResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str
+
+
+class TaskResponse(BaseModel):
+    """Response schema for a task."""
+
+    id: int
+    title: str
+    status: str
+    source_inbox_item_id: int | None
+    created_at: str
+    updated_at: str
+    completed_at: str | None
