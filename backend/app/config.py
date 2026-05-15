@@ -7,7 +7,7 @@ there are no auth, account, role, or multi-user settings by design.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +18,27 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", alias="APP_ENV")
     database_path: Path = Field(default=Path("./data/adhdman.sqlite"), alias="DATABASE_PATH")
 
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
+    )
+    openrouter_model: str = Field(
+        default="inclusionai/ring-2.6-1t:free", alias="OPENROUTER_MODEL"
+    )
+    llm_timeout_seconds: float = Field(default=8.0, alias="LLM_TIMEOUT_SECONDS")
+    rules_accept_threshold: float = Field(
+        default=0.85, alias="RULES_ACCEPT_THRESHOLD"
+    )
+    classify_enabled: bool = Field(default=True, alias="CLASSIFY_ENABLED")
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @field_validator("llm_timeout_seconds")
+    @classmethod
+    def _validate_llm_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("LLM_TIMEOUT_SECONDS must be positive")
+        return value
 
     @property
     def resolved_database_path(self) -> Path:
