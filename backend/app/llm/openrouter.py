@@ -32,6 +32,7 @@ class OpenRouterProvider:
         self._base_url = settings.openrouter_base_url.rstrip("/")
         self._model = settings.openrouter_model
         self._timeout = settings.llm_timeout_seconds
+        self._max_tokens = settings.openrouter_max_tokens
         self._transport = transport
 
     @property
@@ -45,6 +46,7 @@ class OpenRouterProvider:
         payload: dict[str, Any] = {
             "model": self._model,
             "temperature": 0.0,
+            "max_tokens": self._max_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text},

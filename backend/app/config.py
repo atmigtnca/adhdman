@@ -26,6 +26,7 @@ class Settings(BaseSettings):
         default="inclusionai/ring-2.6-1t", alias="OPENROUTER_MODEL"
     )
     llm_timeout_seconds: float = Field(default=8.0, alias="LLM_TIMEOUT_SECONDS")
+    openrouter_max_tokens: int = Field(default=1024, alias="OPENROUTER_MAX_TOKENS")
     rules_accept_threshold: float = Field(
         default=0.85, alias="RULES_ACCEPT_THRESHOLD"
     )
@@ -92,6 +93,13 @@ class Settings(BaseSettings):
     def _validate_llm_timeout_seconds(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("LLM_TIMEOUT_SECONDS must be positive")
+        return value
+
+    @field_validator("openrouter_max_tokens")
+    @classmethod
+    def _validate_openrouter_max_tokens(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("OPENROUTER_MAX_TOKENS must be positive")
         return value
 
     @field_validator("search_max_candidates")

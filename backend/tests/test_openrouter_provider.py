@@ -23,6 +23,7 @@ def _settings(**overrides: object) -> Settings:
         "OPENROUTER_BASE_URL": "https://openrouter.example/api/v1",
         "OPENROUTER_MODEL": "inclusionai/ring-2.6-1t",
         "LLM_TIMEOUT_SECONDS": 1.5,
+        "OPENROUTER_MAX_TOKENS": 1024,
     }
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)
@@ -73,6 +74,7 @@ def test_complete_sends_expected_request_shape() -> None:
     assert isinstance(body, dict)
     assert body["model"] == "inclusionai/ring-2.6-1t"
     assert body["temperature"] == 0.0
+    assert body["max_tokens"] == 1024
     assert body["messages"] == [
         {"role": "system", "content": "system prompt"},
         {"role": "user", "content": "user text"},
