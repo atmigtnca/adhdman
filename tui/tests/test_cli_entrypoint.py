@@ -20,9 +20,10 @@ def test_help_prints_command_reference_without_starting_tui(capsys: pytest.Captu
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "ADHDman" in out
-    assert "/today" in out
-    assert "/focus N" in out
-    assert "/survival on" in out
+    assert "/오늘" in out
+    assert "/집중 N" in out
+    assert "/생존 켜기" in out
+    assert "영어 alias" in out
 
 
 def test_version_prints_project_version_without_starting_tui(capsys: pytest.CaptureFixture[str]) -> None:

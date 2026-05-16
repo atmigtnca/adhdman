@@ -86,6 +86,35 @@ def test_survival_variants():
     assert isinstance(parse_command("/survival wat"), Unknown)
 
 
+def test_korean_helper_commands_parse_as_first_class_aliases():
+    assert isinstance(parse_command("/집중"), FocusCurrent)
+    assert isinstance(parse_command("/집중 중지"), FocusStop)
+    cmd = parse_command("/집중 3")
+    assert isinstance(cmd, FocusStart) and cmd.index == 3
+
+    cmd2 = parse_command("/쪼개기 2")
+    assert isinstance(cmd2, BreakdownSuggest) and cmd2.index == 2
+    assert isinstance(parse_command("/쪼개기 저장"), BreakdownCommit)
+
+    assert isinstance(parse_command("/막힘"), StuckOptions)
+    cmd3 = parse_command("/막힘 미루기")
+    assert isinstance(cmd3, StuckApply) and cmd3.choice == "park"
+
+    assert isinstance(parse_command("/바디더블"), BodyDoubleCurrent)
+    assert isinstance(parse_command("/바디더블 중지"), BodyDoubleStop)
+    assert isinstance(parse_command("/바디더블 체크인"), BodyDoubleCheckIn)
+    cmd4 = parse_command("/바디더블 300")
+    assert isinstance(cmd4, BodyDoubleStart) and cmd4.interval_seconds == 300
+
+    cmd5 = parse_command("/최소단계 1")
+    assert isinstance(cmd5, MVSSuggest) and cmd5.index == 1
+    assert isinstance(parse_command("/최소단계 저장"), MVSCommit)
+
+    assert isinstance(parse_command("/생존"), SurvivalStatus)
+    assert isinstance(parse_command("/생존 켜기"), SurvivalOn)
+    assert isinstance(parse_command("/생존 끄기"), SurvivalOff)
+
+
 def test_case_insensitive_helpers():
     assert isinstance(parse_command("/FOCUS stop"), FocusStop)
     assert isinstance(parse_command("/Body-Double STOP"), BodyDoubleStop)

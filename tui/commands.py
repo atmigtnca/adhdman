@@ -170,6 +170,13 @@ Command = Union[
 
 
 _STUCK_CHOICES = {"shrink", "swap", "skip", "park"}
+_STUCK_CHOICE_ALIASES = {
+    "줄이기": "shrink",
+    "바꾸기": "swap",
+    "넘기기": "skip",
+    "미루기": "park",
+    "보류": "park",
+}
 
 
 def parse_command(line: str) -> Command:
@@ -190,96 +197,99 @@ def parse_command(line: str) -> Command:
     verb = parts[0][1:].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
 
-    if verb == "today":
+    if verb in ("today", "오늘"):
         return Today()
-    if verb == "inbox":
+    if verb in ("inbox", "인박스", "받은것", "받은거"):
         return Inbox()
-    if verb == "tasks":
+    if verb in ("tasks", "할일", "일"):
         return Tasks()
-    if verb == "events":
+    if verb in ("events", "일정"):
         return Events()
-    if verb == "done":
+    if verb in ("done", "완료"):
         if not rest:
             return Done(index=None)
         try:
             return Done(index=int(rest))
         except ValueError:
             return Unknown(raw=stripped)
-    if verb == "undo":
+    if verb in ("undo", "되돌리기", "취소"):
         if not rest:
             return Undo(action_id=None)
         try:
             return Undo(action_id=int(rest))
         except ValueError:
             return Unknown(raw=stripped)
-    if verb == "search":
+    if verb in ("search", "검색"):
         if not rest:
             return Unknown(raw=stripped)
         return Search(query=rest)
-    if verb == "pick":
+    if verb in ("pick", "선택"):
         try:
             return Pick(index=int(rest))
         except ValueError:
             return Unknown(raw=stripped)
-    if verb == "resolve":
+    if verb in ("resolve", "해석"):
         if not rest:
             return Unknown(raw=stripped)
         return Resolve(text=rest)
-    if verb == "help":
+    if verb in ("help", "도움말", "도움", "?"):
         return Help()
-    if verb in ("quit", "exit"):
+    if verb in ("quit", "exit", "종료", "나가기"):
         return Quit()
-    if verb == "focus":
+    if verb in ("focus", "집중"):
         if not rest:
             return FocusCurrent()
         low = rest.lower()
-        if low == "stop":
+        if low in ("stop", "중지", "멈춤", "끝"):
             return FocusStop()
-        if low == "current":
+        if low in ("current", "현재"):
             return FocusCurrent()
         try:
             return FocusStart(index=int(rest))
         except ValueError:
             return Unknown(raw=stripped)
-    if verb == "breakdown":
+    if verb in ("breakdown", "쪼개기", "분해"):
         if not rest:
             return Unknown(raw=stripped)
         low = rest.lower()
-        if low == "commit":
+        if low in ("commit", "저장", "확정"):
             return BreakdownCommit()
         try:
             return BreakdownSuggest(index=int(rest))
         except ValueError:
             return Unknown(raw=stripped)
-    if verb == "stuck":
-        if not rest or rest.lower() == "options":
+    if verb in ("stuck", "막힘"):
+        if not rest or rest.lower() in ("options", "선택지"):
             return StuckOptions()
         choice = rest.lower()
+        if choice in _STUCK_CHOICE_ALIASES:
+            choice = _STUCK_CHOICE_ALIASES[choice]
         if choice in _STUCK_CHOICES:
             return StuckApply(choice=choice)
         # accept "apply shrink" style for symmetry
         parts2 = rest.split(maxsplit=1)
         if len(parts2) == 2 and parts2[0].lower() == "apply":
             sub = parts2[1].strip().lower()
+            sub = _STUCK_CHOICE_ALIASES.get(sub, sub)
             if sub in _STUCK_CHOICES:
                 return StuckApply(choice=sub)
         return Unknown(raw=stripped)
-    if verb == "body-double":
+    if verb in ("body-double", "바디더블"):
         if not rest:
             return BodyDoubleCurrent()
         low = rest.lower()
-        if low == "stop":
+        if low in ("stop", "중지", "멈춤", "끝"):
             return BodyDoubleStop()
-        if low in ("check-in", "checkin"):
+        if low in ("check-in", "checkin", "체크인"):
             return BodyDoubleCheckIn()
-        if low == "current":
+        if low in ("current", "현재"):
             return BodyDoubleCurrent()
-        if low == "start":
+        if low in ("start", "시작"):
             return BodyDoubleStart(interval_seconds=None)
         parts2 = rest.split(maxsplit=1)
         head = parts2[0].lower()
         tail = parts2[1].strip() if len(parts2) > 1 else ""
-        if head == "start":
+        if head in ("start", "시작"):
             if not tail:
                 return BodyDoubleStart(interval_seconds=None)
             try:
@@ -297,16 +307,16 @@ def parse_command(line: str) -> Command:
         if interval <= 0:
             return Unknown(raw=stripped)
         return BodyDoubleStart(interval_seconds=interval)
-    if verb == "mvs":
+    if verb in ("mvs", "최소단계", "최소"):
         if not rest:
             return Unknown(raw=stripped)
         low = rest.lower()
-        if low == "commit":
+        if low in ("commit", "저장", "확정"):
             return MVSCommit()
         parts2 = rest.split(maxsplit=1)
         head = parts2[0].lower()
         tail = parts2[1].strip() if len(parts2) > 1 else ""
-        if head == "suggest":
+        if head in ("suggest", "제안"):
             if not tail:
                 return Unknown(raw=stripped)
             try:
@@ -317,51 +327,57 @@ def parse_command(line: str) -> Command:
             return MVSSuggest(index=int(rest))
         except ValueError:
             return Unknown(raw=stripped)
-    if verb == "survival":
+    if verb in ("survival", "생존"):
         low = rest.lower()
-        if not rest or low == "status":
+        if not rest or low in ("status", "상태"):
             return SurvivalStatus()
-        if low == "on":
+        if low in ("on", "켜기", "시작"):
             return SurvivalOn()
-        if low == "off":
+        if low in ("off", "끄기", "종료"):
             return SurvivalOff()
         return Unknown(raw=stripped)
     return Unknown(raw=stripped)
 
 
 HELP_TEXT = """\
-ADHDman TUI commands (slash-prefixed). Anything else is captured verbatim.
+ADHDman TUI 명령어. 한국어 명령어가 기본이고, 영어 명령어는 호환용 alias로 남겨둔다.
+그냥 문장을 입력하면 그대로 capture 된다.
 
-  /today             show the one thing now
-  /inbox             list inbox items
-  /tasks             list open tasks
-  /events            list upcoming events
-  /done N            complete task N from the last /tasks listing
-  /undo              undo the most recent action
-  /undo ID           undo a specific action id (from the Log)
-  /search <query>    search across tasks/events/inbox
-  /pick N            select candidate N from the last /search
-  /resolve <text>    resolve a natural-language datetime
+기본 흐름:
 
-Execution helpers (Phase 6):
+  /오늘              지금 하나와 오늘 상태 보기        (영어 alias: /today)
+  /인박스            아직 정리 안 된 입력 보기          (영어 alias: /inbox)
+  /할일              열린 할 일 목록 보기               (영어 alias: /tasks)
+  /일정              예정된 일정 보기                   (영어 alias: /events)
+  /완료 N            마지막 /할일 목록의 N번 완료       (영어 alias: /done N)
+  /되돌리기          가장 최근 변경 되돌리기            (영어 alias: /undo)
+  /되돌리기 ID       특정 action id 되돌리기             (영어 alias: /undo ID)
+  /검색 <내용>       task/event/inbox 검색               (영어 alias: /search <query>)
+  /선택 N            마지막 검색/목록의 N번 선택         (영어 alias: /pick N)
+  /해석 <날짜말>     자연어 날짜/시간 해석               (영어 alias: /resolve <text>)
 
-  /focus             show current focus session
-  /focus N           focus on item N from the last listing
-  /focus stop        end the current focus session
-  /breakdown N       suggest 2-5 micro-steps for task N (from last /tasks)
-  /breakdown commit  persist the last suggestion as child tasks
-  /stuck             show the four block-reset options
-  /stuck CHOICE      apply shrink|swap|skip|park to last-selected task
-  /body-double       show current body-double session
-  /body-double N     start a body-double timer with N-second cadence
-  /body-double check-in   record a heartbeat
-  /body-double stop  end the body-double session
-  /mvs N             suggest one minimum-viable step for item N
-  /mvs commit        commit the suggested step and focus on it
-  /survival on       enter survival mode (one task, one event)
-  /survival off      exit survival mode
-  /survival          show survival-mode state
+실행 보조:
 
-  /help              show this help
-  /quit              exit (Ctrl+C also works)
+  /집중              현재 집중 상태 보기                (영어 alias: /focus)
+  /집중 N            마지막 목록의 N번에 집중 시작      (영어 alias: /focus N)
+  /집중 중지         현재 집중 끝내기                   (영어 alias: /focus stop)
+  /쪼개기 N          할 일 N번을 2-5개 작은 단계로 쪼개기 (영어 alias: /breakdown N)
+  /쪼개기 저장       방금 제안된 작은 단계 저장         (영어 alias: /breakdown commit)
+  /막힘              막혔을 때 선택지 보기              (영어 alias: /stuck)
+  /막힘 줄이기       더 작은 행동으로 줄이기            (영어 alias: /stuck shrink)
+  /막힘 바꾸기       다른 일로 바꾸기                   (영어 alias: /stuck swap)
+  /막힘 넘기기       지금 블록에서 넘기기               (영어 alias: /stuck skip)
+  /막힘 미루기       잠깐 보류하기                      (영어 alias: /stuck park)
+  /바디더블          현재 바디더블 상태 보기            (영어 alias: /body-double)
+  /바디더블 N        N초 간격 바디더블 시작             (영어 alias: /body-double N)
+  /바디더블 체크인   하트비트 기록                      (영어 alias: /body-double check-in)
+  /바디더블 중지     바디더블 끝내기                    (영어 alias: /body-double stop)
+  /최소단계 N        N번 항목의 최소 실행 단계 제안     (영어 alias: /mvs N)
+  /최소단계 저장     제안된 최소 단계를 저장하고 집중   (영어 alias: /mvs commit)
+  /생존 켜기         생존 모드 켜기                     (영어 alias: /survival on)
+  /생존 끄기         생존 모드 끄기                     (영어 alias: /survival off)
+  /생존              생존 모드 상태 보기                (영어 alias: /survival)
+
+  /도움말            이 도움말 보기                     (영어 alias: /help)
+  /종료              종료                               (영어 alias: /quit, /exit)
 """

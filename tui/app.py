@@ -53,7 +53,7 @@ from tui.rendering import (
 from tui.state import AppState, PendingBreakdown, PendingMVS
 
 
-BANNER = "ADHDman TUI — local-only. /help for commands. /quit to exit."
+BANNER = "ADHDman TUI — local-only. /도움말 for commands. /종료 to exit."
 
 _BARE_NUMBER_RE = re.compile(r"^\s*(\d+)\s*$")
 _PICK_RE = re.compile(r"^\s*pick\s+(\d+)\s*$", re.IGNORECASE)
@@ -86,11 +86,11 @@ class TuiApp(App):
     def compose(self) -> ComposeResult:
         yield Static(EMPTY_TODAY, id="now")
         yield RichLog(id="log", highlight=False, markup=False, wrap=True)
-        yield Input(placeholder="> capture or /command", id="input")
+        yield Input(placeholder="> 입력하거나 /명령어", id="input")
 
     def on_mount(self) -> None:
         self.log_line("system", BANNER)
-        self.log_line("system", "type /help for the command list.")
+        self.log_line("system", "명령어 목록은 /도움말 로 볼 수 있어.")
 
     # ---------- helpers ----------
     def log_line(self, verb: str, summary: str, action_id: int | None = None) -> None:
@@ -128,7 +128,7 @@ class TuiApp(App):
             self.exit()
             return
         if isinstance(cmd, Unknown):
-            self.log_line("?", f"unknown command {cmd.raw!r} — try /help")
+            self.log_line("?", f"unknown command {cmd.raw!r} — try /도움말")
             return
         # Pick is a pure state mutation — no HTTP, no worker needed.
         if isinstance(cmd, Pick):
