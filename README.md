@@ -84,7 +84,36 @@ UNDO_ENABLED=true
 
 LLM 분류는 선택 기능입니다. `OPENROUTER_API_KEY`가 없으면 네트워크 호출 없이 규칙 기반 분류와 inbox fallback으로 동작합니다.
 
+## 빠른 시작
+
+처음 실행한다면 아래 순서대로 확인하면 됩니다.
+
+```bash
+# 1. 설정 파일 준비
+cp .env.example .env
+
+# 2. 서버 실행
+docker compose up --build
+
+# 3. 다른 터미널에서 상태 확인
+curl -s http://127.0.0.1:8000/health
+```
+
+브라우저에서는 아래 주소를 엽니다.
+
+```text
+http://127.0.0.1:8000/web
+```
+
+Web UI는 읽기 전용입니다. 실제 입력과 변경은 API 또는 TUI에서 합니다.
+
 ## 기본 사용 흐름
+
+ADHDman은 보통 아래 흐름으로 사용합니다.
+
+```text
+캡처하기 → inbox/tasks/events 확인하기 → 오늘 볼 것 고르기 → focus 걸기 → 완료/undo
+```
 
 ### 1. 생각 캡처
 
@@ -124,6 +153,99 @@ curl -s -X POST http://127.0.0.1:8000/tasks/1/done
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/undo/latest
+```
+
+## 사용 예시
+
+### 예시 A. 갑자기 떠오른 메모 저장하기
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/capture \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"전기요금 납부하기"}'
+```
+
+기본 설정에서는 애매한 입력이 안전하게 inbox에 남을 수 있습니다.
+
+```bash
+curl -s http://127.0.0.1:8000/inbox
+```
+
+할 일로 확정하고 싶다면 inbox 항목을 task로 승격합니다.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/inbox/1/promote-task
+curl -s http://127.0.0.1:8000/tasks
+```
+
+### 예시 B. 일정처럼 보이는 문장 저장하기
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/capture \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"금요일 오후 3시에 병원 예약"}'
+```
+
+LLM 분류를 설정했거나 규칙으로 일정이라고 판단되면 event로 생성됩니다. 그렇지 않으면 inbox에 남으므로 나중에 다시 정리할 수 있습니다.
+
+```bash
+curl -s http://127.0.0.1:8000/events
+curl -s http://127.0.0.1:8000/inbox
+```
+
+### 예시 C. 지금 하나만 정해서 시작하기
+
+```bash
+curl -s http://127.0.0.1:8000/today
+curl -s -X POST http://127.0.0.1:8000/focus/start \
+  -H 'Content-Type: application/json' \
+  -d '{"target_type":"task","target_id":1}'
+```
+
+작업을 끝냈다면 완료 처리합니다.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/tasks/1/done
+```
+
+실수했다면 되돌립니다.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/undo/latest
+```
+
+### 예시 D. 너무 큰 일을 작게 쪼개기
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/tasks/1/breakdown/suggest \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+제안을 보고 저장하려면 직접 step을 확정해서 보냅니다.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/tasks/1/breakdown \
+  -H 'Content-Type: application/json' \
+  -d '{"steps":["파일 열기","첫 줄 쓰기"],"source":"manual"}'
+```
+
+### 예시 E. 에너지가 낮을 때 survival mode 켜기
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/survival/enter \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+이 상태에서는 대시보드가 task/event를 최소 개수만 보여줍니다. 데이터는 삭제되지 않습니다.
+
+끄려면:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/survival/exit \
+  -H 'Content-Type: application/json' \
+  -d '{}'
 ```
 
 ## TUI 사용
