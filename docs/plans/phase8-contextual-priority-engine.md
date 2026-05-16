@@ -34,6 +34,16 @@ Expected behavior:
 
 This is the core product behavior, not a polish feature.
 
+## Product Differentiator
+
+ADHDman's differentiator is that the user can open the Web UI and immediately know what they should do right now. The Web UI is not a generic dashboard or a task list viewer; it is an external working-memory display. TUI is where the user captures and controls work. Web UI is where the user glances to answer:
+
+```text
+지금 내가 해야 하는 일이 뭐지?
+```
+
+The first screen must therefore prioritize a single “지금 해야 할 것” card with a short reason. Lists are secondary.
+
 ## Manual Principles to Encode
 
 Source file currently available locally:

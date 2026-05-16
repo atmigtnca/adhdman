@@ -361,7 +361,14 @@ TUI routes:
 
 ## Web Integration
 
-Web remains read-only.
+Web remains read-only and is a central product differentiator: the user should be able to look at the Web UI and immediately understand what to do right now. It must not feel like a generic task database.
+
+Primary order:
+
+1. “지금 해야 할 것” agenda card
+2. reason / deadline / event dependency
+3. coach suggestion
+4. next/later compact list
 
 Add a small coach card under the current agenda card:
 
