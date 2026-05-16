@@ -340,44 +340,44 @@ def parse_command(line: str) -> Command:
 
 
 HELP_TEXT = """\
-ADHDman TUI 명령어. 한국어 명령어가 기본이고, 영어 명령어는 호환용 alias로 남겨둔다.
-그냥 문장을 입력하면 그대로 capture 된다.
+ADHDman에서 쓸 수 있는 명령어야.
+명령어 없이 그냥 적으면 일단 보관함에 넣어둬.
 
 기본 흐름:
 
-  /오늘              지금 하나와 오늘 상태 보기        (영어 alias: /today)
-  /인박스            아직 정리 안 된 입력 보기          (영어 alias: /inbox)
-  /할일              열린 할 일 목록 보기               (영어 alias: /tasks)
-  /일정              예정된 일정 보기                   (영어 alias: /events)
-  /완료 N            마지막 /할일 목록의 N번 완료       (영어 alias: /done N)
-  /되돌리기          가장 최근 변경 되돌리기            (영어 alias: /undo)
-  /되돌리기 ID       특정 action id 되돌리기             (영어 alias: /undo ID)
-  /검색 <내용>       task/event/inbox 검색               (영어 alias: /search <query>)
-  /선택 N            마지막 검색/목록의 N번 선택         (영어 alias: /pick N)
-  /해석 <날짜말>     자연어 날짜/시간 해석               (영어 alias: /resolve <text>)
+  /오늘              지금 하나와 오늘 상태 보기        (영어 명령: /today)
+  /인박스            아직 정리 안 된 입력 보기          (영어 명령: /inbox)
+  /할일              열린 할 일 목록 보기               (영어 명령: /tasks)
+  /일정              예정된 일정 보기                   (영어 명령: /events)
+  /완료 N            마지막 /할일 목록의 N번 완료       (영어 명령: /done N)
+  /되돌리기          가장 최근 변경 되돌리기            (영어 명령: /undo)
+  /되돌리기 ID       특정 action id 되돌리기             (영어 명령: /undo ID)
+  /검색 <내용>       task/event/inbox 검색               (영어 명령: /search <query>)
+  /선택 N            마지막 검색/목록의 N번 선택         (영어 명령: /pick N)
+  /해석 <날짜말>     자연어 날짜/시간 해석               (영어 명령: /resolve <text>)
 
 실행 보조:
 
-  /집중              현재 집중 상태 보기                (영어 alias: /focus)
-  /집중 N            마지막 목록의 N번에 집중 시작      (영어 alias: /focus N)
-  /집중 중지         현재 집중 끝내기                   (영어 alias: /focus stop)
-  /쪼개기 N          할 일 N번을 2-5개 작은 단계로 쪼개기 (영어 alias: /breakdown N)
-  /쪼개기 저장       방금 제안된 작은 단계 저장         (영어 alias: /breakdown commit)
-  /막힘              막혔을 때 선택지 보기              (영어 alias: /stuck)
-  /막힘 줄이기       더 작은 행동으로 줄이기            (영어 alias: /stuck shrink)
-  /막힘 바꾸기       다른 일로 바꾸기                   (영어 alias: /stuck swap)
-  /막힘 넘기기       지금 블록에서 넘기기               (영어 alias: /stuck skip)
-  /막힘 미루기       잠깐 보류하기                      (영어 alias: /stuck park)
-  /바디더블          현재 바디더블 상태 보기            (영어 alias: /body-double)
-  /바디더블 N        N초 간격 바디더블 시작             (영어 alias: /body-double N)
-  /바디더블 체크인   하트비트 기록                      (영어 alias: /body-double check-in)
-  /바디더블 중지     바디더블 끝내기                    (영어 alias: /body-double stop)
-  /최소단계 N        N번 항목의 최소 실행 단계 제안     (영어 alias: /mvs N)
-  /최소단계 저장     제안된 최소 단계를 저장하고 집중   (영어 alias: /mvs commit)
-  /생존 켜기         생존 모드 켜기                     (영어 alias: /survival on)
-  /생존 끄기         생존 모드 끄기                     (영어 alias: /survival off)
-  /생존              생존 모드 상태 보기                (영어 alias: /survival)
+  /집중              현재 집중 상태 보기                (영어 명령: /focus)
+  /집중 N            마지막 목록의 N번에 집중 시작      (영어 명령: /focus N)
+  /집중 중지         현재 집중 끝내기                   (영어 명령: /focus stop)
+  /쪼개기 N          할 일 N번을 2-5개 작은 단계로 쪼개기 (영어 명령: /breakdown N)
+  /쪼개기 저장       방금 제안된 작은 단계 저장         (영어 명령: /breakdown commit)
+  /막힘              막혔을 때 선택지 보기              (영어 명령: /stuck)
+  /막힘 줄이기       더 작은 행동으로 줄이기            (영어 명령: /stuck shrink)
+  /막힘 바꾸기       다른 일로 바꾸기                   (영어 명령: /stuck swap)
+  /막힘 넘기기       지금 블록에서 넘기기               (영어 명령: /stuck skip)
+  /막힘 미루기       잠깐 보류하기                      (영어 명령: /stuck park)
+  /바디더블          현재 바디더블 상태 보기            (영어 명령: /body-double)
+  /바디더블 N        N초 간격 바디더블 시작             (영어 명령: /body-double N)
+  /바디더블 체크인   하트비트 기록                      (영어 명령: /body-double check-in)
+  /바디더블 중지     바디더블 끝내기                    (영어 명령: /body-double stop)
+  /최소단계 N        N번 항목의 최소 실행 단계 제안     (영어 명령: /mvs N)
+  /최소단계 저장     제안된 최소 단계를 저장하고 집중   (영어 명령: /mvs commit)
+  /생존 켜기         생존 모드 켜기                     (영어 명령: /survival on)
+  /생존 끄기         생존 모드 끄기                     (영어 명령: /survival off)
+  /생존              생존 모드 상태 보기                (영어 명령: /survival)
 
-  /도움말            이 도움말 보기                     (영어 alias: /help)
-  /종료              종료                               (영어 alias: /quit, /exit)
+  /도움말            이 도움말 보기                     (영어 명령: /help)
+  /종료              종료                               (영어 명령: /quit, /exit)
 """

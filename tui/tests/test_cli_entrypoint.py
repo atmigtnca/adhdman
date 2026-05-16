@@ -23,7 +23,10 @@ def test_help_prints_command_reference_without_starting_tui(capsys: pytest.Captu
     assert "/오늘" in out
     assert "/집중 N" in out
     assert "/생존 켜기" in out
-    assert "영어 alias" in out
+    assert "영어 명령" in out
+    assert "일단 보관함에 넣어둬" in out
+    assert "capture" not in out
+    assert "호환용 alias" not in out
 
 
 def test_version_prints_project_version_without_starting_tui(capsys: pytest.CaptureFixture[str]) -> None:
