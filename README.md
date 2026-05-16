@@ -250,7 +250,27 @@ curl -s -X POST http://127.0.0.1:8000/survival/exit \
 
 ## TUI 사용
 
-TUI는 터미널에서 ADHDman을 조작하는 명령 센터입니다.
+TUI는 터미널에서 ADHDman과 대화하듯 조작하는 메인 인터페이스입니다.
+
+처음 한 번만 로컬 Python 환경에 설치합니다.
+
+```bash
+pip install -e ".[tui]"
+```
+
+그 다음부터는 `claude`처럼 명령 하나로 실행할 수 있습니다.
+
+```bash
+adhdman
+```
+
+서버가 8000번이 아닌 다른 포트에서 돌고 있다면 backend 주소를 지정합니다.
+
+```bash
+ADHDMAN_BASE_URL=http://127.0.0.1:3000 adhdman
+```
+
+소스 설치를 하지 않은 개발 환경에서는 아래 명령도 사용할 수 있습니다.
 
 ```bash
 python -m tui

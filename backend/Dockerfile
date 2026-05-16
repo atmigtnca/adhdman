@@ -5,6 +5,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1     PYTHONUNBUFFERED=1     PYTHONPATH=/app/backend
 
 COPY pyproject.toml ./
+COPY tui ./tui
 RUN pip install --no-cache-dir -e .
 
 COPY backend ./backend
