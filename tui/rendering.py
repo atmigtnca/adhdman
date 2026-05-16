@@ -30,6 +30,57 @@ def render_today(payload: Any) -> str:
     return str(payload)
 
 
+def render_agenda(payload: Any) -> str:
+    """Render the current-action agenda pane from /agenda/now payload."""
+    if not isinstance(payload, dict):
+        return EMPTY_TODAY
+    now = payload.get("now")
+    if not isinstance(now, dict) or not now:
+        return "지금은 비어 있어\n떠오르는 일을 TUI에서 하나만 적어두면 돼."
+    kind = now.get("kind") or "item"
+    ident = now.get("id")
+    title = now.get("title") or ""
+    lines = ["지금 해야 할 것", f"[{kind} #{ident}] {title}".strip()]
+    reason = now.get("reason")
+    if isinstance(reason, str) and reason:
+        lines.append(reason)
+    due_at = now.get("due_at")
+    starts_at = now.get("starts_at")
+    if due_at:
+        lines.append(f"마감 {due_at}")
+    elif starts_at:
+        lines.append(f"시작 {starts_at}")
+    next_items = payload.get("next") or []
+    if isinstance(next_items, list) and next_items:
+        preview: list[str] = []
+        for item in next_items[:2]:
+            if isinstance(item, dict):
+                preview.append(str(item.get("title") or ""))
+        if preview:
+            lines.append("다음: " + " / ".join(preview))
+    counts = payload.get("counts") or {}
+    if isinstance(counts, dict) and counts:
+        lines.append("  ".join(f"{k}: {v}" for k, v in counts.items()))
+    return "\n".join(lines)
+
+
+def render_coach(payload: Any) -> str:
+    """Render a short execution-coach message."""
+    if not isinstance(payload, dict):
+        return ""
+    message = payload.get("message")
+    tiny_step = payload.get("tiny_step")
+    commands = payload.get("suggested_commands") or []
+    lines: list[str] = []
+    if isinstance(message, str) and message:
+        lines.append("코치: " + message)
+    if isinstance(tiny_step, str) and tiny_step:
+        lines.append("2분 시작: " + tiny_step)
+    if isinstance(commands, list) and commands:
+        lines.append("추천: " + " / ".join(str(cmd) for cmd in commands[:3]))
+    return "\n".join(lines)
+
+
 def render_listing(listing: Listing) -> str:
     if not listing.items:
         return f"{listing.kind}: (empty)"

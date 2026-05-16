@@ -9,7 +9,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from datetime import datetime
+from dataclasses import asdict
 
+from app.agenda import get_agenda_now as get_agenda_now_repo
+from app.coach import coach_next as coach_next_repo
 from app.classification import EmptyTextError, classify
 from app.config import get_settings
 from app.db import init_db
@@ -72,6 +75,8 @@ from app.schemas import (
     CaptureRequest,
     CaptureResponse,
     ClassifyResponse,
+    CoachNextRequest,
+    CoachNextResponse,
     DashboardResponse,
     EventMutationResponse,
     EventResponse,
@@ -137,8 +142,9 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def web_dashboard() -> FileResponse:
     """Serve the static read-only web memory dashboard shell.
 
-    The page loads its data exclusively from ``GET /dashboard``. No form,
-    button, or fetch call in this shell may mutate state.
+    The page loads its data exclusively from read-only ``GET /dashboard``,
+    ``GET /agenda/now``, and ``GET /coach/next``. No form, button, or fetch
+    call in this shell may mutate state.
     """
 
     return FileResponse(WEB_INDEX, media_type="text/html")
@@ -149,6 +155,43 @@ def health() -> dict[str, str]:
     """Health check endpoint used by local and Docker verification."""
 
     return {"status": "ok"}
+
+
+@app.get("/agenda/now")
+def get_agenda_now(now: str) -> dict:
+    """Return the read-only current-action agenda recommendation."""
+
+    try:
+        agenda = get_agenda_now_repo(now=now, settings=settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid now timestamp") from exc
+    return asdict(agenda)
+
+
+@app.post("/coach/next", response_model=CoachNextResponse)
+def coach_next(request: CoachNextRequest) -> CoachNextResponse:
+    """Return a read-only execution coach message for the current agenda."""
+
+    try:
+        payload = coach_next_repo(
+            now=request.now,
+            user_text=request.user_text,
+            settings=settings,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid now timestamp") from exc
+    return CoachNextResponse(**asdict(payload))
+
+
+@app.get("/coach/next", response_model=CoachNextResponse)
+def coach_next_read_only(now: str) -> CoachNextResponse:
+    """GET alias for read-only Web/TUI coach cards with no user text."""
+
+    try:
+        payload = coach_next_repo(now=now, settings=settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid now timestamp") from exc
+    return CoachNextResponse(**asdict(payload))
 
 
 @app.get("/inbox", response_model=list[InboxItemResponse])

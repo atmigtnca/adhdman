@@ -16,11 +16,18 @@
       <p id="status" class="status" role="status"></p>
     </header>
     <main>
-      <section id="section-now" class="card">
-        <h2>Now</h2>
-        <p id="now-message" class="now-message"></p>
-        <p id="now-one-thing" class="now-one-thing"></p>
-        <ul id="now-counts" class="counts"></ul>
+      <section id="section-now" class="card agenda-card">
+        <p class="eyebrow">지금 해야 할 것</p>
+        <h2 id="agenda-now-title">불러오는 중</h2>
+        <p id="agenda-now-reason" class="now-message"></p>
+        <p id="agenda-now-meta" class="meta"></p>
+        <ul id="agenda-next-list" class="item-list compact"></ul>
+      </section>
+      <section id="section-coach" class="card coach-card">
+        <h2>Coach</h2>
+        <p id="coach-message" class="coach-message"></p>
+        <p id="coach-tiny-step" class="coach-step"></p>
+        <ul id="coach-commands" class="item-list compact"></ul>
       </section>
       <section id="section-focus" class="card">
         <h2>Focus</h2>

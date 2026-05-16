@@ -5,6 +5,8 @@
   "use strict";
 
   const DASHBOARD_URL = "/dashboard";
+  const AGENDA_URL = "/agenda/now";
+  const COACH_URL = "/coach/next";
 
   function setStatus(text) {
     const el = document.getElementById("status");
@@ -38,6 +40,55 @@
       li.appendChild(meta);
     }
     return li;
+  }
+
+  function renderAgenda(agenda) {
+    const title = document.getElementById("agenda-now-title");
+    const reason = document.getElementById("agenda-now-reason");
+    const meta = document.getElementById("agenda-now-meta");
+    const nextList = document.getElementById("agenda-next-list");
+    const now = agenda && agenda.now;
+    if (now) {
+      title.textContent = now.title || "지금 하나";
+      reason.textContent = now.reason || "지금은 이것부터 보면 돼.";
+      const timeText = now.due_at
+        ? "마감 " + now.due_at
+        : (now.starts_at ? "시작 " + now.starts_at : now.urgency || "");
+      meta.textContent = timeText;
+    } else {
+      title.textContent = "지금은 비어 있어";
+      reason.textContent = "떠오르는 일을 TUI에서 하나만 적어두면 돼.";
+      meta.textContent = "";
+    }
+    clearChildren(nextList);
+    const nextItems = (agenda && agenda.next) || [];
+    if (nextItems.length === 0) {
+      appendEmpty(nextList, "다음 항목 없음.");
+      return;
+    }
+    nextItems.slice(0, 3).forEach(function (item) {
+      const itemMeta = item.due_at
+        ? "마감 " + item.due_at
+        : (item.starts_at ? "시작 " + item.starts_at : item.kind);
+      nextList.appendChild(makeItem(item.title, itemMeta));
+    });
+  }
+
+  function renderCoach(coach) {
+    const message = document.getElementById("coach-message");
+    const tinyStep = document.getElementById("coach-tiny-step");
+    const commands = document.getElementById("coach-commands");
+    message.textContent = coach && coach.message ? coach.message : "지금은 하나만 보면 돼.";
+    tinyStep.textContent = coach && coach.tiny_step ? "2분 시작: " + coach.tiny_step : "";
+    clearChildren(commands);
+    const suggested = (coach && coach.suggested_commands) || [];
+    if (suggested.length === 0) {
+      appendEmpty(commands, "추천 명령 없음.");
+      return;
+    }
+    suggested.slice(0, 3).forEach(function (cmd) {
+      commands.appendChild(makeItem(cmd, "TUI"));
+    });
   }
 
   function renderNow(today) {
@@ -225,26 +276,37 @@
   }
 
   function render(payload) {
-    renderNow(payload.today);
-    renderFocus(payload.focus);
-    renderInbox(payload.inbox);
-    renderTasks(payload.tasks);
-    renderEvents(payload.events);
-    renderWeek(payload.week);
-    renderRecent(payload.recent_actions);
+    renderAgenda(payload.agenda);
+    renderCoach(payload.coach);
+    renderFocus(payload.dashboard.focus);
+    renderInbox(payload.dashboard.inbox);
+    renderTasks(payload.dashboard.tasks);
+    renderEvents(payload.dashboard.events);
+    renderWeek(payload.dashboard.week);
+    renderRecent(payload.dashboard.recent_actions);
   }
 
   function refresh() {
     setStatus("Loading…");
-    fetch(DASHBOARD_URL, { method: "GET", headers: { Accept: "application/json" } })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error("dashboard request failed: " + response.status);
-        }
-        return response.json();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const agendaUrl = AGENDA_URL + "?now=" + encodeURIComponent(nowIso);
+    const coachUrl = COACH_URL + "?now=" + encodeURIComponent(nowIso);
+    Promise.all([
+      fetch(DASHBOARD_URL, { method: "GET", headers: { Accept: "application/json" } }),
+      fetch(agendaUrl, { method: "GET", headers: { Accept: "application/json" } }),
+      fetch(coachUrl, { method: "GET", headers: { Accept: "application/json" } })
+    ])
+      .then(function (responses) {
+        responses.forEach(function (response) {
+          if (!response.ok) {
+            throw new Error("request failed: " + response.status);
+          }
+        });
+        return Promise.all(responses.map(function (response) { return response.json(); }));
       })
-      .then(function (payload) {
-        render(payload);
+      .then(function (payloads) {
+        render({ dashboard: payloads[0], agenda: payloads[1], coach: payloads[2] });
         const now = new Date();
         setStatus("Updated " + now.toLocaleTimeString());
       })

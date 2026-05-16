@@ -46,9 +46,10 @@ from tui.commands import (
 from tui.rendering import (
     EMPTY_TODAY,
     listing_from_payload,
+    render_agenda,
+    render_coach,
     render_listing,
     render_log_line,
-    render_today,
 )
 from tui.state import AppState, PendingBreakdown, PendingMVS
 
@@ -99,7 +100,7 @@ class TuiApp(App):
 
     def set_now(self, payload: Any) -> None:
         self.state.today = payload if isinstance(payload, dict) else None
-        self.query_one("#now", Static).update(render_today(payload))
+        self.query_one("#now", Static).update(render_agenda(payload))
 
     # ---------- input ----------
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -253,9 +254,14 @@ class TuiApp(App):
                 )
                 return
             if isinstance(cmd, Today):
-                payload = self.client.get_today()
-                self.call_from_thread(self.set_now, payload)
-                self.call_from_thread(self.log_line, "/today", "Now refreshed")
+                agenda = self.client.get_agenda_now()
+                coach = self.client.get_coach_next()
+                self.call_from_thread(self.set_now, agenda)
+                coach_text = render_coach(coach)
+                if coach_text:
+                    for line in coach_text.splitlines():
+                        self.call_from_thread(self.log_line, "/coach", line)
+                self.call_from_thread(self.log_line, "/today", "Agenda refreshed")
                 return
             if isinstance(cmd, Inbox):
                 payload = self.client.list_inbox()

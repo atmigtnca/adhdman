@@ -56,8 +56,10 @@ def test_web_route_returns_html_shell(client: TestClient) -> None:
     assert response.headers["content-type"].startswith("text/html")
     body = response.text
     assert "ADHDman Web Memory" in body
-    assert "Read-only" in body
-    # The shell must declare its data and script sources via the static mount.
+    assert "지금 해야 할 것" in body
+    assert "agenda-now-title" in body
+    assert "agenda-now-reason" in body
+    assert "coach-message" in body
     assert "/static/web/web.css" in body
     assert "/static/web/web.js" in body
 
@@ -76,22 +78,39 @@ def test_static_assets_are_served(client: TestClient) -> None:
     assert "fetch" in js.text
 
 
-def test_static_files_only_fetch_dashboard_with_get() -> None:
-    """JS must only issue read-only fetches to ``GET /dashboard``."""
+def test_static_files_fetch_dashboard_agenda_and_coach_with_get() -> None:
+    """JS must only issue read-only fetches to dashboard, agenda, and coach endpoints."""
 
     # No fetch options object that sets a non-GET method.
     forbidden_methods = re.compile(r"method\s*:\s*[\"'](POST|PATCH|PUT|DELETE)[\"']", re.I)
     assert not forbidden_methods.search(WEB_JS)
 
-    # The only URL the JS targets is /dashboard.
+    # The only URLs the JS targets are read-only dashboard/agenda/coach constants.
     fetch_targets = re.findall(r"fetch\(\s*([A-Z_][A-Z0-9_]*|[\"'][^\"']+[\"'])", WEB_JS)
     assert fetch_targets, "expected at least one fetch() call"
-    # All targets must reference the dashboard constant or literal.
-    assert all(target in {"DASHBOARD_URL", "\"/dashboard\"", "'/dashboard'"} for target in fetch_targets)
+    assert all(
+        target in {
+            "DASHBOARD_URL",
+            "AGENDA_URL",
+            "COACH_URL",
+            "\"/dashboard\"",
+            "'/dashboard'",
+            "\"/agenda/now\"",
+            "'/agenda/now'",
+            "\"/coach/next\"",
+            "'/coach/next'",
+        }
+        for target in fetch_targets
+    )
     assert "/dashboard" in WEB_JS
+    assert "/agenda/now" in WEB_JS
+    assert "/coach/next" in WEB_JS
 
-    # The dashboard constant resolves to /dashboard.
     assert re.search(r"DASHBOARD_URL\s*=\s*[\"']/dashboard[\"']", WEB_JS)
+    assert re.search(r"AGENDA_URL\s*=\s*[\"']/agenda/now[\"']", WEB_JS)
+    assert re.search(r"COACH_URL\s*=\s*[\"']/coach/next[\"']", WEB_JS)
+    assert "const nowIso = now.toISOString()" in WEB_JS
+    assert "encodeURIComponent(nowIso)" in WEB_JS
 
 
 def test_static_files_have_no_mutation_endpoint_strings() -> None:

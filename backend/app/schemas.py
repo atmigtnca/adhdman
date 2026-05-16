@@ -590,3 +590,24 @@ class FocusPanelResponse(BaseModel):
     target: FocusTarget | None = None
     body_double: FocusSessionResponse | None = None
     survival: bool
+
+
+class CoachNextRequest(BaseModel):
+    """Read-only request for POST /coach/next."""
+
+    now: str
+    user_text: str | None = Field(default=None, max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class CoachNextResponse(BaseModel):
+    """Validated execution coach response."""
+
+    mode: Literal["agenda", "stuck", "mvs", "transition", "survival", "clarification"]
+    message: str = Field(max_length=240)
+    tiny_step: str = Field(max_length=80)
+    suggested_commands: list[str] = Field(default_factory=list, max_length=3)
+    needs_confirmation: bool = False
+    clarification_options: list[str] = Field(default_factory=list, max_length=4)
+    source: Literal["rules", "llm"]

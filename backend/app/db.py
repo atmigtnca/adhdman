@@ -126,6 +126,14 @@ PHASE_6_ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("tasks", "block_state", "ALTER TABLE tasks ADD COLUMN block_state TEXT"),
 )
 
+PHASE_8_ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    (
+        "tasks",
+        "do_before_event_id",
+        "ALTER TABLE tasks ADD COLUMN do_before_event_id INTEGER REFERENCES events(id)",
+    ),
+)
+
 
 def _existing_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
@@ -133,7 +141,10 @@ def _existing_columns(connection: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _apply_additive_columns(connection: sqlite3.Connection) -> None:
-    for table, column, statement in PHASE_3_ADDITIVE_COLUMNS + PHASE_6_ADDITIVE_COLUMNS:
+    additive_columns = (
+        PHASE_3_ADDITIVE_COLUMNS + PHASE_6_ADDITIVE_COLUMNS + PHASE_8_ADDITIVE_COLUMNS
+    )
+    for table, column, statement in additive_columns:
         if column not in _existing_columns(connection, table):
             connection.execute(statement)
 

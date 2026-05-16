@@ -57,6 +57,8 @@ def test_wrappers_hit_expected_paths():
     c = TuiClient(base_url="http://127.0.0.1:8000", transport=_mock_transport(handler))
     try:
         c.get_today()
+        c.get_agenda_now(now="2026-05-31T12:00:00+09:00")
+        c.get_coach_next(now="2026-05-31T12:00:00+09:00")
         c.list_inbox()
         c.list_tasks()
         c.list_events()
@@ -72,6 +74,8 @@ def test_wrappers_hit_expected_paths():
     methods_paths = [(m, p) for (m, p, _) in seen]
     assert methods_paths == [
         ("GET", "/today"),
+        ("GET", "/agenda/now"),
+        ("GET", "/coach/next"),
         ("GET", "/inbox"),
         ("GET", "/tasks"),
         ("GET", "/events"),
@@ -82,9 +86,9 @@ def test_wrappers_hit_expected_paths():
         ("POST", "/search"),
         ("POST", "/resolve"),
     ]
-    capture_body = json.loads(seen[4][2])
+    capture_body = json.loads(seen[6][2])
     assert capture_body == {"text": "buy milk"}
-    resolve_body = json.loads(seen[9][2])
+    resolve_body = json.loads(seen[11][2])
     assert resolve_body == {"text": "tomorrow 3pm", "tz": "UTC"}
 
 

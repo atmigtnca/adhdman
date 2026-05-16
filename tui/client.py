@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -87,9 +88,20 @@ class TuiClient:
         except ValueError:
             return resp.text
 
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
     # Read endpoints -------------------------------------------------
     def get_today(self) -> Any:
         return self._request("GET", "/today")
+
+    def get_agenda_now(self, *, now: str | None = None) -> Any:
+        params = {"now": now or self._now_iso()}
+        return self._request("GET", "/agenda/now", params=params)
+
+    def get_coach_next(self, *, now: str | None = None) -> Any:
+        params = {"now": now or self._now_iso()}
+        return self._request("GET", "/coach/next", params=params)
 
     def list_inbox(self) -> Any:
         return self._request("GET", "/inbox")
