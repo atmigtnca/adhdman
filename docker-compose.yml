@@ -7,6 +7,12 @@ services:
       APP_NAME: ${APP_NAME:-ADHDman}
       APP_ENV: ${APP_ENV:-development}
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/adhdman.sqlite}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-inclusionai/ring-2.6-1t}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-8}
+      RULES_ACCEPT_THRESHOLD: ${RULES_ACCEPT_THRESHOLD:-0.85}
+      CLASSIFY_ENABLED: ${CLASSIFY_ENABLED:-true}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
