@@ -1,351 +1,287 @@
 # ADHDman
 
-ADHDman is a local-first, single-user execution support system for capturing tasks, events, and ambiguous thoughts with low friction.
+ADHDman은 생각, 할 일, 일정, 애매한 메모를 빠르게 받아 적고 다시 실행 가능한 형태로 정리하는 **로컬 우선 실행 보조 도구**입니다.
 
-The project is intentionally not a public SaaS. It has no built-in login, account, role, or multi-user system. Access control is expected to be handled outside the app through local binding, SSH tunnels, VPNs, or another trusted access-control layer.
+복잡한 협업 SaaS가 아니라, 개인이 자기 컴퓨터에서 가볍게 켜고 쓰는 단일 사용자 도구를 목표로 합니다.
 
-## Security model
+## 핵심 특징
 
-This app has no built-in authentication by design.
+- 빠른 캡처: 애매한 문장도 버리지 않고 먼저 inbox에 저장
+- 할 일 / 일정 분류: 규칙 기반 분류와 선택적 LLM 분류 지원
+- 오늘 할 일 보기: 지금 볼 것만 작게 보여주는 `/today`
+- 안전한 수정과 되돌리기: 주요 변경은 action log에 기록되고 `/undo`로 복구 가능
+- TUI 명령 센터: 터미널에서 slash command로 조작
+- 읽기 전용 Web UI: 브라우저에서 현재 상태를 확인
+- 실행 보조 기능: focus, breakdown, stuck reset, body double, MVS, survival mode
 
-Do not expose it directly to the public internet.
+## 보안 모델
 
-Recommended deployment posture:
+ADHDman은 의도적으로 **로그인/계정/권한 시스템이 없습니다.**
 
-- Bind services to `127.0.0.1` by default.
-- Use SSH tunneling, VPN, or a trusted external access-control layer for remote access.
-- Keep real secrets in `.env` only; commit `.env.example` with placeholder values.
-- Keep local SQLite data out of git.
+따라서 직접 public internet에 노출하면 안 됩니다.
 
-## Phase 0 scope
+권장 사용 방식:
 
-Current foundation scope:
+- 기본은 `127.0.0.1` localhost에서만 실행
+- 원격 접근이 필요하면 SSH tunnel, VPN, reverse proxy 인증 같은 외부 보호 계층 사용
+- 실제 비밀값은 `.env`에만 저장
+- SQLite 데이터베이스와 `.env`는 git에 커밋하지 않기
 
-- FastAPI backend
-- `/health` endpoint
-- environment-based config loader
-- SQLite path helper
-- Docker Compose backend service
-- pytest health/config tests
+## 실행 방법
 
-Out of scope for Phase 0:
+가장 간단한 실행 방법은 Docker Compose입니다.
 
-- LLM intent harness
-- TUI
-- Web dashboard
-- SSE
-- CRUD/domain schema
-- remote deployment
+```bash
+docker compose up --build
+```
 
-## Phase 1 API examples
+기본 compose 설정은 다음 주소로만 바인딩됩니다.
 
-Run the backend locally, then exercise the Phase 1 capture core with these requests:
+```text
+http://127.0.0.1:8000
+```
+
+상태 확인:
 
 ```bash
 curl -s http://127.0.0.1:8000/health
-curl -s -X POST http://127.0.0.1:8000/capture -H 'Content-Type: application/json' -d '{"text":"pay rent"}'
-curl -s http://127.0.0.1:8000/inbox
-curl -s -X POST http://127.0.0.1:8000/inbox/1/promote-task
-curl -s http://127.0.0.1:8000/tasks
-curl -s -X POST http://127.0.0.1:8000/tasks/1/done
-curl -s http://127.0.0.1:8000/today
 ```
 
-Reminder: ADHDman is local-first and has no built-in authentication. Keep it bound to localhost or place it behind SSH tunneling, VPN, or another trusted access-control layer; do not expose it directly to the public internet.
+Web UI 열기:
 
-## Phase 2 API examples
+```text
+http://127.0.0.1:8000/web
+```
 
-Phase 2 adds an intent-classification layer on top of capture. Every `POST /capture` still stores the raw text as an inbox row first, then runs the classifier. If the classifier produces a high-confidence `task` or `event`, the inbox row is promoted and a `task`/`event` row is created. Otherwise the item stays in the inbox under the capture-first guarantee.
+중지:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/capture \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"buy milk"}'
-curl -s -X POST http://127.0.0.1:8000/capture \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Dentist 2026-07-04T09:00"}'
-curl -s -X POST http://127.0.0.1:8000/classify \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"groceries"}'
-curl -s http://127.0.0.1:8000/events
+docker compose down
 ```
 
-`POST /capture` response shape (Phase 2):
-
-```json
-{
-  "id": 1,
-  "inbox_item_id": 1,
-  "text": "buy milk",
-  "status": "promoted",
-  "created_at": "...",
-  "updated_at": "...",
-  "classification": {
-    "intent": "task",
-    "confidence": 0.9,
-    "source": "rules",
-    "title": "buy milk",
-    "starts_at": null,
-    "ends_at": null,
-    "reason": "...",
-    "created": { "type": "task", "id": 1 }
-  }
-}
-```
-
-`POST /classify` is a read-only preview: it returns the same classification block without writing inbox, task, event, action, or classification rows.
-
-`GET /events` lists events created by the classifier, ordered by `starts_at` ascending (events without a start time sort last).
-
-Diagnostic table: every persisted classification also writes a row into `classifications` (`inbox_item_id`, `intent`, `confidence`, `source`, `raw_response`, `created_at`) so recovery and debugging can reconstruct what the classifier decided. `source` is one of `rules`, `llm`, `repair`, `fallback`.
-
-### Local-only LLM configuration
-
-The LLM stage is optional. When `OPENROUTER_API_KEY` is unset, the pipeline runs the deterministic rules pass and falls back to the inbox for anything ambiguous; no network call is made. When the key is set in your local `.env`, the pipeline may call OpenRouter for inputs that the rules pass cannot classify confidently.
-
-Configuration (placeholders only — never commit real keys):
+로컬 Python 환경에서 직접 실행하고 싶다면:
 
 ```bash
-# .env (local only; not committed)
-OPENROUTER_API_KEY=
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=inclusionai/ring-2.6-1t
-LLM_TIMEOUT_SECONDS=8.0
-RULES_ACCEPT_THRESHOLD=0.85
+DATABASE_PATH=./data/adhdman.sqlite python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+```
+
+## 설정
+
+`.env.example`을 참고해 로컬 `.env`를 만들 수 있습니다.
+
+```bash
+cp .env.example .env
+```
+
+대표 설정:
+
+```bash
+DATABASE_PATH=./data/adhdman.sqlite
 CLASSIFY_ENABLED=true
-```
-
-Setting `CLASSIFY_ENABLED=false` reverts capture to Phase 1 semantics: every `POST /capture` only writes an inbox row and a `capture` action; no task/event/classification row is produced.
-
-The LLM call is initiated by the local process only. ADHDman remains local-first: bind to `127.0.0.1`, do not expose it to the public internet, and treat the OpenRouter key as a local secret.
-
-## Phase 3 API examples
-
-Phase 3 makes captured rows safely editable, deletable, and reversible.
-
-```bash
-# Resolve a free-form datetime phrase (read-only)
-curl -s -X POST http://127.0.0.1:8000/resolve \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"tomorrow 3pm","tz":"America/Los_Angeles"}'
-
-# Edit a task / event by id (logs a full before/after snapshot)
-curl -s -X PATCH http://127.0.0.1:8000/tasks/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"call dentist","due_at":"2026-05-20T10:00"}'
-curl -s -X PATCH http://127.0.0.1:8000/events/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"starts_at":"2026-06-02T10:00"}'
-
-# Soft-delete (recoverable via undo)
-curl -s -X DELETE http://127.0.0.1:8000/tasks/1
-curl -s -X DELETE http://127.0.0.1:8000/events/1
-
-# Find candidates by free-form text (READ-ONLY; never mutates)
-curl -s -X POST http://127.0.0.1:8000/search \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"dentist"}'
-
-# Reverse a specific action or the most recent one
-curl -s -X POST http://127.0.0.1:8000/undo/12
-curl -s -X POST http://127.0.0.1:8000/undo/latest
-```
-
-`POST /search` is the safe candidate-selection layer. It returns up to
-`SEARCH_MAX_CANDIDATES` (default 5) scored candidates across tasks, events, and
-open inbox items. Soft-deleted rows are excluded. The response also reports an
-`ambiguous` flag when the top two candidates' scores are within
-`SEARCH_AMBIGUITY_THRESHOLD` of each other, so callers can disambiguate before
-calling a mutating endpoint. Mutations never accept free-form text as a target
-selector — the caller must pass an explicit id to `PATCH`/`DELETE`.
-
-```json
-{
-  "query": "dentist",
-  "candidates": [
-    { "type": "event", "id": 12, "title": "dentist checkup", "starts_at": "2026-05-20T10:00:00-07:00", "score": 0.88 },
-    { "type": "task",  "id":  7, "title": "call dentist",     "starts_at": null,                       "score": 0.61 }
-  ],
-  "ambiguous": false,
-  "max_candidates": 5,
-  "ambiguity_threshold": 0.15
-}
-```
-
-Phase 3 configuration (placeholders only; never commit real values):
-
-```bash
-# .env (local only)
 LOCAL_TIMEZONE=UTC
-SEARCH_MAX_CANDIDATES=5
-SEARCH_AMBIGUITY_THRESHOLD=0.15
 UNDO_ENABLED=true
 ```
 
-## Phase 5 Web Memory
+LLM 분류는 선택 기능입니다. `OPENROUTER_API_KEY`가 없으면 네트워크 호출 없이 규칙 기반 분류와 inbox fallback으로 동작합니다.
 
-Phase 5 adds a localhost-only, read-only web dashboard that helps you remember what already exists in ADHDman. The page is a small static shell served by the FastAPI backend; the browser fetches only `GET /dashboard` and renders Now, Inbox, Tasks, Events, Week, and Recent Changes sections. There are no forms, no mutation buttons, and no auth surface — Phase 1–3 mutation endpoints remain API/TUI-only.
+## 기본 사용 흐름
+
+### 1. 생각 캡처
 
 ```bash
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
-# open http://127.0.0.1:8000/web in a local browser
+curl -s -X POST http://127.0.0.1:8000/capture \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"내일 오전 10시에 병원 예약"}'
 ```
 
-The dashboard is read-only by design: the refresh control only re-fetches `GET /dashboard`. Do not expose this app directly to the public internet; keep it bound to `127.0.0.1` or behind SSH tunneling, VPN, or another trusted access-control layer.
+캡처된 내용은 먼저 inbox에 저장됩니다. 분류가 가능하면 task/event로 승격되고, 애매하면 inbox에 남습니다.
 
-## Phase 6 Execution Helpers
-
-Phase 6 adds a small set of opinionated execution helpers on top of the Phase 1–5 capture/resolve/dashboard core. These helpers do not capture new data — they help with starting, continuing, or surviving when the existing surfaces feel too heavy. Helpers are local-only, single-user, state-light, recoverable via `/undo`, and use non-shaming tone strings from `backend/app/copy.py`.
-
-The helpers never call a remote presence service. Body-double is a local timer + render contract. Mutations write `actions` rows so `/undo` reverses them like any other Phase 3 change. The web dashboard surfaces focus/body-double/survival state read-only — no start/stop controls on the web side.
-
-### Focus (one thing)
+### 2. inbox 확인
 
 ```bash
-curl -s http://127.0.0.1:8000/focus/current
+curl -s http://127.0.0.1:8000/inbox
+```
+
+### 3. task 확인
+
+```bash
+curl -s http://127.0.0.1:8000/tasks
+```
+
+### 4. 오늘 볼 것 확인
+
+```bash
+curl -s http://127.0.0.1:8000/today
+```
+
+### 5. 완료 처리
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/tasks/1/done
+```
+
+### 6. 되돌리기
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/undo/latest
+```
+
+## TUI 사용
+
+TUI는 터미널에서 ADHDman을 조작하는 명령 센터입니다.
+
+```bash
+python -m tui
+```
+
+주요 명령:
+
+```text
+/today             지금 볼 것 확인
+/inbox             inbox 목록
+/tasks             task 목록
+/events            event 목록
+/search <query>    task/event/inbox 검색
+/pick N            검색 결과 N번 선택
+/done N            task 목록의 N번 완료
+/undo              최근 변경 되돌리기
+/focus N           최근 목록의 N번에 집중
+/focus stop        집중 종료
+/breakdown N       task N번을 작은 단계로 쪼개기 제안
+/breakdown commit  제안된 단계 저장
+/stuck             막혔을 때 선택지 보기
+/stuck shrink      더 작게 쪼개기
+/stuck swap        다른 대상으로 전환
+/stuck skip        하루 미루기
+/stuck park        오늘 목록에서 잠시 숨기기
+/body-double N     N초 간격의 로컬 body-double 세션 시작
+/body-double check-in
+/body-double stop
+/mvs N             최소 실행 가능 단계 제안
+/mvs commit        제안된 최소 단계 저장 후 focus
+/survival on       survival mode 켜기
+/survival off      survival mode 끄기
+/help              도움말
+/quit              종료
+```
+
+대상을 바꾸는 명령은 자유문장 대신 목록 번호를 사용합니다. 잘못된 항목을 수정하는 일을 줄이기 위한 설계입니다.
+
+## Web UI
+
+Web UI는 읽기 전용 대시보드입니다.
+
+```text
+http://127.0.0.1:8000/web
+```
+
+표시하는 내용:
+
+- Now
+- Inbox
+- Tasks
+- Events
+- Week
+- Recent Changes
+- Focus 상태
+- Body-double 상태
+- Survival mode 상태
+
+Web UI에는 생성/수정/삭제 버튼이 없습니다. 데이터 변경은 API 또는 TUI에서 수행합니다.
+
+## 실행 보조 기능
+
+### Focus
+
+하나의 task/event/inbox item에 집중 상태를 겁니다.
+
+```bash
 curl -s -X POST http://127.0.0.1:8000/focus/start \
   -H 'Content-Type: application/json' \
   -d '{"target_type":"task","target_id":1}'
-curl -s -X POST http://127.0.0.1:8000/focus/stop
 ```
-
-Only one focus session is active at a time. Starting a second session without `"replace": true` returns a 409 with a structured `existing` payload rather than silently swapping.
 
 ### Breakdown
 
+큰 task를 2~5개의 작은 child task로 나눕니다.
+
 ```bash
-curl -s -X POST http://127.0.0.1:8000/tasks/1/breakdown/suggest \
-  -H 'Content-Type: application/json' \
-  -d '{}'
 curl -s -X POST http://127.0.0.1:8000/tasks/1/breakdown \
   -H 'Content-Type: application/json' \
-  -d '{"steps":["open the document","write one paragraph"],"source":"manual"}'
-curl -s http://127.0.0.1:8000/tasks/1/children
+  -d '{"steps":["문서 열기","첫 문단 쓰기"],"source":"manual"}'
 ```
 
-Children are normal task rows linked by `parent_task_id`; a single `breakdown` action covers all children, so one `/undo` reverses the whole split. Suggestions are deterministic and rules-only in this phase.
+### Stuck reset
 
-### Block reset (stuck)
+막혔을 때 `shrink`, `swap`, `skip`, `park` 중 하나를 적용합니다.
 
 ```bash
-curl -s "http://127.0.0.1:8000/stuck/options?target_type=task&target_id=1"
 curl -s -X POST http://127.0.0.1:8000/stuck \
   -H 'Content-Type: application/json' \
   -d '{"target_type":"task","target_id":1,"choice":"shrink"}'
 ```
 
-`choice` is one of `shrink`, `swap`, `skip`, `park`. The prompt and labels come from the shared non-shaming copy library so TUI and web render the same text.
-
 ### Body double
+
+외부 서비스 없이 로컬 타이머와 check-in 상태만 기록합니다.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/body-double/start \
   -H 'Content-Type: application/json' \
   -d '{"interval_seconds":300}'
-curl -s -X POST http://127.0.0.1:8000/body-double/check-in
-curl -s http://127.0.0.1:8000/body-double/current
-curl -s -X POST http://127.0.0.1:8000/body-double/stop
 ```
 
-`interval_seconds` must fall between `BODY_DOUBLE_MIN_INTERVAL` and `BODY_DOUBLE_MAX_INTERVAL`. No external call is made — heartbeats are recorded locally on the active `focus_sessions` row.
+### MVS
 
-### Minimum viable step (mvs)
+Minimum Viable Step, 즉 지금 시작할 수 있는 가장 작은 한 단계를 만듭니다.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/mvs/suggest \
   -H 'Content-Type: application/json' \
   -d '{"target_type":"task","target_id":1}'
-curl -s -X POST http://127.0.0.1:8000/mvs/commit \
-  -H 'Content-Type: application/json' \
-  -d '{"target_type":"task","target_id":1,"step":"open the document"}'
 ```
-
-`/mvs/commit` creates a child task carrying the step and starts a focus session on it; both actions are individually reversible via `/undo`.
 
 ### Survival mode
 
+에너지가 낮을 때 화면에 보이는 task/event 수를 최소화합니다. 데이터는 삭제하지 않고 표시만 줄입니다.
+
 ```bash
 curl -s -X POST http://127.0.0.1:8000/survival/enter \
-  -H 'Content-Type: application/json' -d '{}'
-curl -s http://127.0.0.1:8000/survival
-curl -s http://127.0.0.1:8000/dashboard
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+끄기:
+
+```bash
 curl -s -X POST http://127.0.0.1:8000/survival/exit \
-  -H 'Content-Type: application/json' -d '{}'
+  -H 'Content-Type: application/json' \
+  -d '{}'
 ```
 
-Survival mode is a filter, not a delete: while active, `/dashboard` clamps tasks and events to `SURVIVAL_MAX_TASKS` and `SURVIVAL_MAX_EVENTS`. Nothing is removed and capture still works.
+## 개발
 
-### TUI commands
-
-Phase 6 maps each helper to a slash command. Target arguments index into the most recent listing in the same TUI session (free-form text is never used as a mutation target). `/body-double N` is the exception: `N` is a local check-in interval in seconds.
-
-```
-/focus            show current focus session
-/focus N          focus on item N from the last listing
-/focus stop       end the focus session
-/breakdown N      suggest 2–5 micro-steps for task N
-/breakdown commit persist the last suggestion as child tasks
-/stuck            show block-reset options
-/stuck CHOICE     apply shrink|swap|skip|park to the last-selected task
-/body-double N    start a body-double timer with N-second cadence
-/body-double check-in   record a heartbeat
-/body-double stop end the body-double session
-/mvs N            suggest one minimum-viable step for item N
-/mvs commit       commit the suggested step and focus on it
-/survival on      enter survival mode
-/survival off     exit survival mode
-/survival         show survival-mode state
-```
-
-### Read-only Web dashboard
-
-`GET /dashboard` returns a `focus` block alongside the existing Now/Inbox/Tasks/Events/Week/Recent sections:
-
-```json
-{
-  "focus": {
-    "session": {
-      "id": 4,
-      "kind": "focus",
-      "target_type": "task",
-      "target_id": 7,
-      "status": "active",
-      "started_at": "...",
-      "ended_at": null,
-      "interval_seconds": null,
-      "note": null,
-      "last_check_in_at": null
-    },
-    "target": { "type": "task", "id": 7, "title": "open the document" },
-    "body_double": null,
-    "survival": false
-  }
-}
-```
-
-The web page at `http://127.0.0.1:8000/web` renders this as a Focus panel under Now, tags the header `Survival mode` when active, and never adds start/stop controls. Mutations stay API/TUI only.
-
-### Phase 6 configuration
-
-Placeholders only; never commit real values:
+테스트:
 
 ```bash
-# .env (local only)
-BODY_DOUBLE_DEFAULT_INTERVAL=300
-BODY_DOUBLE_MIN_INTERVAL=60
-BODY_DOUBLE_MAX_INTERVAL=1800
-SURVIVAL_MAX_TASKS=1
-SURVIVAL_MAX_EVENTS=1
+python -m pytest backend/tests tui/tests -q
 ```
 
-Phase 6 keeps helper suggestions deterministic and rules-only. Existing Phase 2 settings (`OPENROUTER_API_KEY`, `LLM_TIMEOUT_SECONDS`, `CLASSIFY_ENABLED`) still apply to the capture/classification pipeline.
-
-Reminder: ADHDman has no built-in authentication. Keep it bound to `127.0.0.1` and place it behind SSH tunneling, VPN, or another trusted access-control layer; do not expose it directly to the public internet.
-
-## Development
+Lint:
 
 ```bash
-python -m pytest backend/tests -q
+python -m ruff check backend/app backend/tests tui
+```
+
+Docker health check:
+
+```bash
 docker compose up --build
 curl -s http://127.0.0.1:8000/health
 ```
+
+## 현재 상태
+
+ADHDman은 아직 개인용 로컬 도구에 가깝습니다. 안정적인 public SaaS나 multi-user 제품이 아닙니다.
+
+public internet에 직접 노출하지 말고, 먼저 localhost에서 사용해 보세요.

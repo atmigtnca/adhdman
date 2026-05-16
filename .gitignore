@@ -12,6 +12,9 @@ venv/
 .env.*
 !.env.example
 
+# Local-only documentation
+LOCALREADME.md
+
 # Local data
 /data/*
 !/data/.gitkeep
