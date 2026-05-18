@@ -393,17 +393,31 @@ async def test_capture_refreshes_web_memory_dashboard():
     assert calls[:3] == ["/capture", "/agenda/now", "/coach/next"]
 
 
-def test_slash_input_change_shows_compact_command_menu():
+def test_slash_input_change_shows_compact_command_menu_as_ui_not_log():
     app = TuiApp(client=_mock_client(lambda r: httpx.Response(200, json={})))
     seen: list[tuple[str, str]] = []
     app.log_line = lambda verb, summary, action_id=None: seen.append((verb, summary))  # type: ignore[method-assign]
 
-    app.on_input_changed(type("Event", (), {"value": "/"})())
+    class Event:
+        value = "/"
 
+    async def run():
+        from textual.widgets import Static
+
+        async with app.run_test() as pilot:
+            seen.clear()
+            app.on_input_changed(Event())
+            await pilot.pause()
+            menu = app.query_one("#command-menu", Static)
+            text = str(menu.render())
+            assert menu.display is True
+            assert "명령어를 고를 수 있어." in text
+            assert "/오늘" in text
+            assert "/집중 N" in text
+            assert "/도움말" in text
+
+    import asyncio
+
+    asyncio.run(run())
     app.client.close()
-    assert seen
-    assert seen[0] == ("/", "명령어를 고를 수 있어.")
-    summaries = "\n".join(summary for _, summary in seen)
-    assert "/오늘" in summaries
-    assert "/집중 N" in summaries
-    assert "/도움말" in summaries
+    assert seen == []

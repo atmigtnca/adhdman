@@ -65,6 +65,7 @@ class TuiApp(App):
     CSS = """
     Screen { layout: vertical; }
     #now { height: 1fr; border: solid $accent; padding: 1 2; }
+    #command-menu { height: auto; max-height: 18; border: round $secondary; padding: 0 2; }
     #log { height: 8; border: solid $primary; padding: 0 1; }
     #input { dock: bottom; height: 3; }
     """
@@ -85,6 +86,9 @@ class TuiApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(render_memory_dashboard({}, None), id="now")
+        command_menu = Static("", id="command-menu")
+        command_menu.display = False
+        yield command_menu
         yield RichLog(id="log", highlight=False, markup=False, wrap=True)
         yield Input(placeholder="> 입력하거나 /명령어", id="input")
 
@@ -93,6 +97,14 @@ class TuiApp(App):
         self.log_line("system", "명령어 목록은 /도움말 로 볼 수 있어.")
 
     # ---------- helpers ----------
+    def show_command_menu(self) -> None:
+        menu = self.query_one("#command-menu", Static)
+        menu.update(SLASH_COMMAND_MENU)
+        menu.display = True
+
+    def hide_command_menu(self) -> None:
+        self.query_one("#command-menu", Static).display = False
+
     def log_line(self, verb: str, summary: str, action_id: int | None = None) -> None:
         log = self.query_one("#log", RichLog)
         log.write(render_log_line(verb, summary, action_id))
@@ -105,17 +117,16 @@ class TuiApp(App):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         line = event.value
         event.input.value = ""
+        self.hide_command_menu()
         self.state.push_history(line)
         cmd = self._parse_with_listing_context(line)
         self.dispatch(cmd)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.value.strip() == "/":
-            self._show_slash_command_menu()
-
-    def _show_slash_command_menu(self) -> None:
-        for hline in SLASH_COMMAND_MENU.splitlines():
-            self.log_line("/", hline)
+            self.show_command_menu()
+        else:
+            self.hide_command_menu()
 
     def _parse_with_listing_context(self, line: str) -> Command:
         """Bare numbers and non-slash 'pick N' route to Pick when a listing exists."""
