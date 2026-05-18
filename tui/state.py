@@ -50,6 +50,15 @@ class PendingMVS:
 
 
 @dataclass
+class PendingClarification:
+    """A user-facing question that needs one more answer before capture."""
+
+    kind: str
+    original: str
+    subject: str
+
+
+@dataclass
 class AppState:
     today: dict[str, Any] | None = None
     last_listing: Listing | None = None
@@ -57,6 +66,7 @@ class AppState:
     history: list[str] = field(default_factory=list)  # input lines, in-memory only
     pending_breakdown: PendingBreakdown | None = None
     pending_mvs: PendingMVS | None = None
+    pending_clarification: PendingClarification | None = None
     survival_active: bool = False
 
     def set_listing(self, listing: Listing) -> None:

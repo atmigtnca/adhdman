@@ -50,13 +50,16 @@ from tui.rendering import (
     render_log_line,
     render_memory_dashboard,
 )
-from tui.state import AppState, PendingBreakdown, PendingMVS
+from tui.state import AppState, PendingBreakdown, PendingClarification, PendingMVS
 
 
 BANNER = "ADHDman TUI — local-only. /도움말 for commands. /종료 to exit."
 
 _BARE_NUMBER_RE = re.compile(r"^\s*(\d+)\s*$")
 _PICK_RE = re.compile(r"^\s*pick\s+(\d+)\s*$", re.IGNORECASE)
+_KOREAN_TIME_RE = re.compile(r"(오전|오후|저녁|밤|새벽)?\s*\d{1,2}\s*(시|:)")
+_TODAY_QUERY_RE = re.compile(r"오늘\s*(뭐|무엇|할\s*거|할일|일정|해야)")
+_TODAY_DEADLINE_RE = re.compile(r"오늘\s*(까지|안에)")
 
 
 class TuiApp(App):
@@ -113,11 +116,22 @@ class TuiApp(App):
         self.state.today = payload if isinstance(payload, dict) else None
         self.query_one("#now", Static).update(render_memory_dashboard(payload, coach))
 
+    def show_clarification(self, text: str) -> None:
+        self.query_one("#now", Static).update(
+            "확인이 필요해\n"
+            f"  {text}\n\n"
+            "답을 입력하면 그 내용까지 합쳐서 저장할게."
+        )
+
     # ---------- input ----------
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        line = event.value
+        line = event.value.strip()
         event.input.value = ""
         self.hide_command_menu()
+        if self.state.pending_clarification is not None and line and not line.startswith("/"):
+            pending = self.state.pending_clarification
+            self.state.pending_clarification = None
+            line = self._answer_pending_clarification(pending, line)
         self.state.push_history(line)
         cmd = self._parse_with_listing_context(line)
         self.dispatch(cmd)
@@ -135,6 +149,34 @@ class TuiApp(App):
             if m:
                 return Pick(index=int(m.group(1)))
         return parse_command(line)
+
+    def _maybe_start_clarification(self, line: str) -> bool:
+        text = line.strip()
+        if not text.startswith("오늘"):
+            return False
+        if _KOREAN_TIME_RE.search(text):
+            return False
+        if _TODAY_QUERY_RE.search(text):
+            return False
+        if _TODAY_DEADLINE_RE.search(text):
+            return False
+        subject = text.removeprefix("오늘").strip()
+        if not subject:
+            return False
+        self.state.pending_clarification = PendingClarification(
+            kind="today_time", original=text, subject=subject
+        )
+        self.show_clarification(
+            f"오늘 {subject}은 언제 갈 계획이야? 정확한 시간을 알려줘."
+        )
+        return True
+
+    def _answer_pending_clarification(
+        self, pending: PendingClarification, answer: str
+    ) -> str:
+        if pending.kind == "today_time":
+            return f"오늘 {answer.strip()} {pending.subject}"
+        return f"{pending.original} {answer.strip()}"
 
     def dispatch(self, cmd: Command) -> None:
         if isinstance(cmd, Noop):
@@ -239,6 +281,8 @@ class TuiApp(App):
             self._dispatch_async(lambda: self._do_mvs_commit(pending))
             return
         # All remaining commands hit the network — run off the UI thread.
+        if isinstance(cmd, Capture) and self._maybe_start_clarification(cmd.text):
+            return
         self._dispatch_async(lambda: self._run_network(cmd))
 
     # ---------- worker plumbing ----------

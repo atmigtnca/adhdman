@@ -421,3 +421,37 @@ def test_slash_input_change_shows_compact_command_menu_as_ui_not_log():
     asyncio.run(run())
     app.client.close()
     assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_today_timeless_event_asks_for_time_before_capture():
+    calls: list[tuple[str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.url.path, request.content))
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input, Static
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "오늘 병원"
+        await inp.action_submit()
+        await pilot.pause()
+
+        now_text = str(app.query_one("#now", Static).render())
+        assert "오늘 병원은 언제 갈 계획이야?" in now_text
+        assert "정확한 시간을 알려줘" in now_text
+        assert calls == []
+
+        inp.value = "오후 3시"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    c.close()
+    assert calls
+    assert calls[0][0] == "/capture"
+    assert "오늘 오후 3시 병원" in calls[0][1].decode()
