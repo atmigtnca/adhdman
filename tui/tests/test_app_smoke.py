@@ -336,3 +336,58 @@ async def test_today_renders_dashboard_even_when_coach_times_out():
         assert "요약" in now_text
     c.close()
     assert calls[:2] == ["/agenda/now", "/coach/next"]
+
+
+@pytest.mark.asyncio
+async def test_capture_refreshes_web_memory_dashboard():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/capture":
+            return httpx.Response(200, json={"id": 14, "kind": "event"})
+        if request.url.path == "/agenda/now":
+            return httpx.Response(
+                200,
+                json={
+                    "now": {
+                        "kind": "event",
+                        "id": 14,
+                        "title": "오늘 15시 회의",
+                        "reason": "곧 시작되는 일정이라서 보여줘요.",
+                    },
+                    "next": [],
+                    "later": [],
+                    "counts": {"tasks": 0, "events": 1, "inbox": 0},
+                },
+            )
+        if request.url.path == "/coach/next":
+            return httpx.Response(
+                200,
+                json={
+                    "mode": "agenda",
+                    "message": "지금은 회의 준비만 보면 돼.",
+                    "tiny_step": "회의 링크 확인하기",
+                    "suggested_commands": ["/집중"],
+                    "needs_confirmation": False,
+                    "clarification_options": [],
+                    "source": "rules",
+                },
+            )
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input, Static
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "오늘 15시 회의"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        now_text = str(app.query_one("#now", Static).render())
+        assert "오늘 15시 회의" in now_text
+        assert "코치 제안" in now_text
+    c.close()
+    assert calls[:3] == ["/capture", "/agenda/now", "/coach/next"]

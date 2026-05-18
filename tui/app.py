@@ -250,6 +250,7 @@ class TuiApp(App):
                 self.call_from_thread(
                     self.log_line, "capture", _summarize_capture(cmd.text, payload)
                 )
+                self._refresh_now_in_thread()
                 return
             if isinstance(cmd, Today):
                 agenda, coach = self._get_agenda_and_optional_coach()
