@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Literal
+import json
+from typing import Any, Literal
 
 from app.agenda import AgendaItem, get_agenda_now
 from app.config import Settings
+from app.llm.base import LLMError, LLMProvider, LLMResult
 
 CoachMode = Literal["agenda", "stuck", "mvs", "transition", "survival", "clarification"]
 CoachSource = Literal["rules", "llm"]
+ALLOWED_MODES = {"agenda", "stuck", "mvs", "transition", "survival", "clarification"}
 
 STUCK_MARKERS = (
     "못하",
@@ -63,7 +66,7 @@ def _deadline_pressure(item: AgendaItem | None, now_dt: datetime) -> bool:
 
 def _command_for(item: AgendaItem | None, command: str) -> str:
     if item is None or item.kind != "task":
-        return command
+        return f"/{command}"
     return f"/{command} 1"
 
 
@@ -102,11 +105,121 @@ def _survival_message(item: AgendaItem | None) -> str:
     return f"오늘은 범위를 낮추자. {item.title} 전체가 아니라 첫 행동 하나만 보면 돼."[:240]
 
 
+
+def _allowed_commands(item: AgendaItem | None, mode: CoachMode) -> list[str]:
+    if mode == "mvs":
+        return [_command_for(item, "최소단계"), _command_for(item, "쪼개기"), "/바디더블 300"]
+    if mode == "stuck":
+        return [_command_for(item, "쪼개기"), _command_for(item, "최소단계"), "/바디더블 300"]
+    if mode == "survival":
+        return ["/생존", _command_for(item, "최소단계"), "/바디더블 300"]
+    return [_command_for(item, "집중"), _command_for(item, "쪼개기"), _command_for(item, "최소단계")]
+
+
+def _rules_response(item: AgendaItem | None, mode: CoachMode) -> CoachResponse:
+    if mode == "mvs":
+        message = _mvs_message(item)
+    elif mode == "stuck":
+        message = _stuck_message(item)
+    elif mode == "survival":
+        message = _survival_message(item)
+    else:
+        message = _agenda_message(item)
+    return CoachResponse(
+        mode=mode,
+        message=message[:240],
+        tiny_step=_tiny_step(item, mode)[:80],
+        suggested_commands=_allowed_commands(item, mode)[:3],
+        needs_confirmation=False,
+        clarification_options=[],
+        source="rules",
+    )
+
+
+def _coach_system_prompt() -> str:
+    return (
+        "You are ADHDman's execution coach. Return JSON only. "
+        "Use Korean, short non-shaming wording. Keep one thing visible. "
+        "Never invent state, never mutate data, never give medical advice. "
+        "Schema: mode, message, tiny_step, suggested_commands, needs_confirmation, "
+        "clarification_options. message <= 240 chars, tiny_step <= 80 chars, "
+        "suggested_commands max 3 and only from allowed_commands."
+    )
+
+
+def _coach_user_prompt(*, now: str, item: AgendaItem | None, mode: CoachMode, user_text: str, allowed_commands: list[str]) -> str:
+    if item is None:
+        agenda = {"now": None}
+    else:
+        agenda = {
+            "kind": item.kind,
+            "title": item.title,
+            "reason": item.reason,
+            "due_at": item.due_at,
+            "starts_at": item.starts_at,
+            "urgency": item.urgency,
+        }
+    return json.dumps(
+        {
+            "now": now,
+            "recommended_mode": mode,
+            "current_agenda": agenda,
+            "recent_user_text": user_text[:500],
+            "allowed_commands": allowed_commands,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _coerce_bool(value: Any) -> bool:
+    return value if isinstance(value, bool) else False
+
+
+def _validate_llm_response(raw: str, *, fallback: CoachResponse, allowed_commands: list[str]) -> CoachResponse | None:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    mode = data.get("mode", fallback.mode)
+    if mode not in ALLOWED_MODES:
+        mode = fallback.mode
+    message = data.get("message")
+    tiny_step = data.get("tiny_step")
+    if not isinstance(message, str) or not message.strip() or len(message) > 240:
+        return None
+    if tiny_step is None:
+        tiny_step = fallback.tiny_step
+    if not isinstance(tiny_step, str) or len(tiny_step) > 80:
+        return None
+    raw_commands = data.get("suggested_commands") or []
+    if not isinstance(raw_commands, list):
+        return None
+    commands: list[str] = []
+    for command in raw_commands:
+        if isinstance(command, str) and command in allowed_commands and command not in commands:
+            commands.append(command)
+        if len(commands) == 3:
+            break
+    raw_options = data.get("clarification_options") or []
+    options = [str(opt)[:80] for opt in raw_options[:3]] if isinstance(raw_options, list) else []
+    return CoachResponse(
+        mode=mode,  # type: ignore[arg-type]
+        message=message,
+        tiny_step=tiny_step,
+        suggested_commands=commands or fallback.suggested_commands,
+        needs_confirmation=_coerce_bool(data.get("needs_confirmation")),
+        clarification_options=options,
+        source="llm",
+    )
+
 def coach_next(
     *,
     now: str,
     settings: Settings,
     user_text: str | None = None,
+    provider: LLMProvider | None = None,
 ) -> CoachResponse:
     now_dt = datetime.fromisoformat(now)
     agenda = get_agenda_now(now=now, settings=settings)
@@ -124,25 +237,27 @@ def coach_next(
     else:
         mode = "agenda"
 
-    if mode == "mvs":
-        message = _mvs_message(item)
-        commands = [_command_for(item, "최소단계"), _command_for(item, "쪼개기"), "/바디더블 300"]
-    elif mode == "stuck":
-        message = _stuck_message(item)
-        commands = [_command_for(item, "쪼개기"), _command_for(item, "최소단계"), "/바디더블 300"]
-    elif mode == "survival":
-        message = _survival_message(item)
-        commands = ["/생존", _command_for(item, "최소단계"), "/바디더블 300"]
-    else:
-        message = _agenda_message(item)
-        commands = [_command_for(item, "집중"), _command_for(item, "쪼개기"), _command_for(item, "최소단계")]
+    fallback = _rules_response(item, mode)
+    if provider is None or not provider.available:
+        return fallback
 
-    return CoachResponse(
-        mode=mode,
-        message=message[:240],
-        tiny_step=_tiny_step(item, mode)[:80],
-        suggested_commands=commands[:3],
-        needs_confirmation=False,
-        clarification_options=[],
-        source="rules",
+    allowed_commands = _allowed_commands(item, mode)[:3]
+    result = provider.complete(
+        _coach_system_prompt(),
+        _coach_user_prompt(
+            now=now,
+            item=item,
+            mode=mode,
+            user_text=text,
+            allowed_commands=allowed_commands,
+        ),
     )
+    if isinstance(result, LLMError):
+        return fallback
+    if isinstance(result, LLMResult):
+        llm_response = _validate_llm_response(
+            result.text, fallback=fallback, allowed_commands=allowed_commands
+        )
+        if llm_response is not None:
+            return llm_response
+    return fallback

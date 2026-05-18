@@ -157,6 +157,18 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def get_llm_provider() -> LLMProvider | None:
+    """Return the production LLM provider, or None when no key is configured.
+
+    Tests inject a fake via ``app.dependency_overrides[get_llm_provider]`` to
+    keep the suite offline.
+    """
+
+    if not settings.openrouter_api_key:
+        return None
+    return OpenRouterProvider(settings)
+
+
 @app.get("/agenda/now")
 def get_agenda_now(now: str) -> dict:
     """Return the read-only current-action agenda recommendation."""
@@ -169,7 +181,10 @@ def get_agenda_now(now: str) -> dict:
 
 
 @app.post("/coach/next", response_model=CoachNextResponse)
-def coach_next(request: CoachNextRequest) -> CoachNextResponse:
+def coach_next(
+    request: CoachNextRequest,
+    provider: LLMProvider | None = Depends(get_llm_provider),
+) -> CoachNextResponse:
     """Return a read-only execution coach message for the current agenda."""
 
     try:
@@ -177,6 +192,7 @@ def coach_next(request: CoachNextRequest) -> CoachNextResponse:
             now=request.now,
             user_text=request.user_text,
             settings=settings,
+            provider=provider,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid now timestamp") from exc
@@ -184,11 +200,14 @@ def coach_next(request: CoachNextRequest) -> CoachNextResponse:
 
 
 @app.get("/coach/next", response_model=CoachNextResponse)
-def coach_next_read_only(now: str) -> CoachNextResponse:
+def coach_next_read_only(
+    now: str,
+    provider: LLMProvider | None = Depends(get_llm_provider),
+) -> CoachNextResponse:
     """GET alias for read-only Web/TUI coach cards with no user text."""
 
     try:
-        payload = coach_next_repo(now=now, settings=settings)
+        payload = coach_next_repo(now=now, settings=settings, provider=provider)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid now timestamp") from exc
     return CoachNextResponse(**asdict(payload))
@@ -199,18 +218,6 @@ def get_inbox() -> list[InboxItemResponse]:
     """List open inbox items oldest first."""
 
     return list_inbox_items(settings=settings)
-
-
-def get_llm_provider() -> LLMProvider | None:
-    """Return the production LLM provider, or None when no key is configured.
-
-    Tests inject a fake via ``app.dependency_overrides[get_llm_provider]`` to
-    keep the suite offline.
-    """
-
-    if not settings.openrouter_api_key:
-        return None
-    return OpenRouterProvider(settings)
 
 
 @app.post("/capture", response_model=CaptureResponse, status_code=201)

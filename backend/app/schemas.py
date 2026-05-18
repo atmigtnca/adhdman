@@ -609,5 +609,5 @@ class CoachNextResponse(BaseModel):
     tiny_step: str = Field(max_length=80)
     suggested_commands: list[str] = Field(default_factory=list, max_length=3)
     needs_confirmation: bool = False
-    clarification_options: list[str] = Field(default_factory=list, max_length=4)
+    clarification_options: list[str] = Field(default_factory=list, max_length=3)
     source: Literal["rules", "llm"]
