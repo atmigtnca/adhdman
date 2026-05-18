@@ -40,6 +40,11 @@ class Done:
 
 
 @dataclass(frozen=True)
+class Delete:
+    index: int | None  # 1-based; None means use last_selection
+
+
+@dataclass(frozen=True)
 class Undo:
     action_id: int | None  # None means /undo/latest
 
@@ -158,7 +163,7 @@ class SurvivalStatus:
 
 
 Command = Union[
-    Noop, Capture, Today, Inbox, Tasks, Events, Done, Undo, Search, Pick,
+    Noop, Capture, Today, Inbox, Tasks, Events, Done, Delete, Undo, Search, Pick,
     Resolve, Help, Quit, Unknown,
     FocusStart, FocusStop, FocusCurrent,
     BreakdownSuggest, BreakdownCommit,
@@ -210,6 +215,13 @@ def parse_command(line: str) -> Command:
             return Done(index=None)
         try:
             return Done(index=int(rest))
+        except ValueError:
+            return Unknown(raw=stripped)
+    if verb in ("delete", "삭제", "지우기", "제거"):
+        if not rest:
+            return Delete(index=None)
+        try:
+            return Delete(index=int(rest))
         except ValueError:
             return Unknown(raw=stripped)
     if verb in ("undo", "되돌리기", "취소"):
@@ -352,6 +364,7 @@ SLASH_COMMAND_MENU = """\
 실행:
   /집중 N      N번에 집중 시작
   /완료 N      N번 할 일 완료
+  /삭제 N      N번 할 일/일정 삭제
   /쪼개기 N    작은 단계로 쪼개기
   /막힘        막혔을 때 선택지 보기
   /최소단계 N  제출 가능한 최소 단계
@@ -374,6 +387,7 @@ ADHDman에서 쓸 수 있는 명령어야.
   /할일              열린 할 일 목록 보기               (영어 명령: /tasks)
   /일정              예정된 일정 보기                   (영어 명령: /events)
   /완료 N            마지막 /할일 목록의 N번 완료       (영어 명령: /done N)
+  /삭제 N            마지막 목록의 N번 삭제              (영어 명령: /delete N)
   /되돌리기          가장 최근 변경 되돌리기            (영어 명령: /undo)
   /되돌리기 ID       특정 action id 되돌리기             (영어 명령: /undo ID)
   /검색 <내용>       task/event/inbox 검색               (영어 명령: /search <query>)

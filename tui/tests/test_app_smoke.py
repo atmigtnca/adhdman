@@ -234,7 +234,7 @@ async def test_done_does_not_label_task_id_as_action_id():
             )
         return httpx.Response(200, json={})
 
-    from textual.widgets import Input, RichLog
+    from textual.widgets import Input, Static
 
     c = _mock_client(handler)
     app = TuiApp(client=c)
@@ -248,14 +248,13 @@ async def test_done_does_not_label_task_id_as_action_id():
         await inp.action_submit()
         await app.workers.wait_for_complete()
         await pilot.pause()
-        log = app.query_one("#log", RichLog)
-        text = "\n".join(str(line) for line in log.lines)
+        text = str(app.query_one("#status", Static).render())
     c.close()
     assert ("POST", "/tasks/11/done") in calls
-    assert "task #11 done" in text
+    assert "완료했어: 할 일 #11" in text
     # Must not mislabel the task id as an action id.
     assert "action #11" not in text
-    assert "action #" not in text or "action #11" not in text
+    assert "action #" not in text
 
 
 @pytest.mark.asyncio
@@ -455,3 +454,49 @@ async def test_today_timeless_event_asks_for_time_before_capture():
     assert calls
     assert calls[0][0] == "/capture"
     assert "오늘 오후 3시 병원" in calls[0][1].decode()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_from_listing_refreshes_dashboard_without_log_panel():
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path == "/events":
+            return httpx.Response(200, json=[{"id": 21, "title": "병원", "starts_at": "2026-05-18T15:00:00+09:00"}])
+        if request.url.path == "/events/21":
+            return httpx.Response(200, json={"event": {"id": 21, "title": "병원", "status": "deleted"}, "action_id": 9})
+        if request.url.path == "/agenda/now":
+            return httpx.Response(200, json={"now": None, "next": [], "later": [], "counts": {"tasks": 0, "events": 0, "inbox": 0}})
+        if request.url.path == "/coach/next":
+            return httpx.Response(200, json={"message": "정리됐어.", "suggested_commands": []})
+        return httpx.Response(200, json={})
+
+    from textual.css.query import NoMatches
+    from textual.widgets import Input, Static
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/일정"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        inp.value = "/삭제 1"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        status = str(app.query_one("#status", Static).render())
+        assert "삭제했어" in status
+        assert "병원" in status
+        try:
+            app.query_one("#log")
+        except NoMatches:
+            pass
+        else:
+            raise AssertionError("log panel should not be part of the user-facing TUI")
+
+    c.close()
+    assert ("DELETE", "/events/21") in calls
+    assert ("GET", "/agenda/now") in calls

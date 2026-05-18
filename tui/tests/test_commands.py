@@ -1,5 +1,6 @@
 from tui.commands import (
     Capture,
+    Delete,
     Done,
     Events,
     Help,
@@ -70,6 +71,16 @@ def test_done_with_and_without_index():
 
 def test_done_non_integer_is_unknown():
     assert isinstance(parse_command("/done foo"), Unknown)
+
+
+def test_delete_with_and_without_index():
+    cmd = parse_command("/delete 2")
+    assert isinstance(cmd, Delete) and cmd.index == 2
+    cmd2 = parse_command("/delete")
+    assert isinstance(cmd2, Delete) and cmd2.index is None
+    cmd3 = parse_command("/삭제 2")
+    assert isinstance(cmd3, Delete) and cmd3.index == 2
+    assert isinstance(parse_command("/delete foo"), Unknown)
 
 
 def test_undo_variants():

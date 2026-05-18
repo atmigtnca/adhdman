@@ -5,7 +5,7 @@ import re
 from typing import Any, Callable
 
 from textual.app import App, ComposeResult
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, Static
 
 from tui.client import ClientError, TuiClient
 from tui.commands import (
@@ -17,6 +17,7 @@ from tui.commands import (
     BreakdownSuggest,
     Capture,
     Command,
+    Delete,
     Done,
     Events,
     FocusCurrent,
@@ -69,7 +70,7 @@ class TuiApp(App):
     Screen { layout: vertical; }
     #now { height: 1fr; border: solid $accent; padding: 1 2; }
     #command-menu { height: auto; max-height: 18; border: round $secondary; padding: 0 2; }
-    #log { height: 8; border: solid $primary; padding: 0 1; }
+    #status { height: auto; max-height: 10; border: round $primary; padding: 0 2; }
     #input { dock: bottom; height: 3; }
     """
 
@@ -92,12 +93,11 @@ class TuiApp(App):
         command_menu = Static("", id="command-menu")
         command_menu.display = False
         yield command_menu
-        yield RichLog(id="log", highlight=False, markup=False, wrap=True)
+        yield Static("준비됐어. 그냥 적거나 / 를 눌러 명령을 골라.", id="status")
         yield Input(placeholder="> 입력하거나 /명령어", id="input")
 
     def on_mount(self) -> None:
-        self.log_line("system", BANNER)
-        self.log_line("system", "명령어 목록은 /도움말 로 볼 수 있어.")
+        self.show_status("준비됐어. 그냥 적거나 / 를 눌러 명령을 골라.")
 
     # ---------- helpers ----------
     def show_command_menu(self) -> None:
@@ -109,8 +109,11 @@ class TuiApp(App):
         self.query_one("#command-menu", Static).display = False
 
     def log_line(self, verb: str, summary: str, action_id: int | None = None) -> None:
-        log = self.query_one("#log", RichLog)
-        log.write(render_log_line(verb, summary, action_id))
+        line = render_log_line(verb, summary, action_id)
+        self.show_status(line)
+
+    def show_status(self, text: str) -> None:
+        self.query_one("#status", Static).update(text)
 
     def set_now(self, payload: Any, coach: Any = None) -> None:
         self.state.today = payload if isinstance(payload, dict) else None
@@ -199,9 +202,20 @@ class TuiApp(App):
         if isinstance(cmd, Done):
             target = self.state.resolve_task_target(cmd.index)
             if target is None:
-                self.log_line("/done", "Run /tasks first, then /done N.")
+                self.log_line("/done", "먼저 /할일 을 보고, /완료 N 으로 골라줘.")
                 return
             self._dispatch_async(lambda: self._do_done(target.id))
+            return
+        if isinstance(cmd, Delete):
+            target = (
+                self.state.resolve_listing_target(cmd.index, allowed_kinds=("task", "event"))
+                if cmd.index is not None
+                else self.state.last_selection
+            )
+            if target is None or target.kind not in ("task", "event"):
+                self.show_status("먼저 /할일 또는 /일정 을 보고, /삭제 N 으로 골라줘.")
+                return
+            self._dispatch_async(lambda: self._do_delete(target.kind, target.id, target.title))
             return
         # Phase 6 helpers with local-state preconditions ----------------
         if isinstance(cmd, FocusStart):
@@ -592,11 +606,25 @@ class TuiApp(App):
         try:
             self.client.complete_task(task_id)
         except ClientError as exc:
-            self.call_from_thread(self.log_line, "error", str(exc))
+            self.call_from_thread(self.show_status, f"문제가 생겼어: {exc}")
             return
-        # /tasks/{id}/done returns a TaskResponse, not an action id. Don't
-        # mislabel the task id as an action id; just log the completion.
-        self.call_from_thread(self.log_line, "/done", f"task #{task_id} done")
+        self.call_from_thread(self.show_status, f"완료했어: 할 일 #{task_id}")
+        self._refresh_now_in_thread()
+
+    def _do_delete(self, kind: str, item_id: int, title: str) -> None:
+        try:
+            if kind == "task":
+                self.client.delete_task(item_id)
+            elif kind == "event":
+                self.client.delete_event(item_id)
+            else:
+                self.call_from_thread(self.show_status, "할 일이나 일정만 삭제할 수 있어.")
+                return
+        except ClientError as exc:
+            self.call_from_thread(self.show_status, f"삭제하지 못했어: {exc}")
+            return
+        label = "할 일" if kind == "task" else "일정"
+        self.call_from_thread(self.show_status, f"삭제했어: {label} #{item_id} {title}")
         self._refresh_now_in_thread()
 
     def _refresh_now_in_thread(self) -> None:
@@ -610,15 +638,12 @@ class TuiApp(App):
     def _show_listing(self, kind: str, payload: Any) -> None:
         listing = listing_from_payload(kind, payload)
         self.state.set_listing(listing)
-        rendered = render_listing(listing)
-        for ln in rendered.splitlines():
-            self.log_line(f"/{kind}", ln)
+        self.show_status(render_listing(listing))
 
     def _show_search(self, payload: Any) -> None:
         listing = listing_from_payload("search", payload)
         self.state.set_listing(listing)
-        for ln in render_listing(listing).splitlines():
-            self.log_line("/search", ln)
+        self.show_status(render_listing(listing))
 
 
 def _summarize_capture(text: str, payload: Any) -> str:

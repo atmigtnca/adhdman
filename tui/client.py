@@ -121,6 +121,12 @@ class TuiClient:
     def complete_task(self, task_id: int) -> Any:
         return self._request("POST", f"/tasks/{int(task_id)}/done")
 
+    def delete_task(self, task_id: int) -> Any:
+        return self._request("DELETE", f"/tasks/{int(task_id)}")
+
+    def delete_event(self, event_id: int) -> Any:
+        return self._request("DELETE", f"/events/{int(event_id)}")
+
     def undo_latest(self) -> Any:
         return self._request("POST", "/undo/latest")
 
