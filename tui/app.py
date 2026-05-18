@@ -44,12 +44,10 @@ from tui.commands import (
     parse_command,
 )
 from tui.rendering import (
-    EMPTY_TODAY,
     listing_from_payload,
-    render_agenda,
-    render_coach,
     render_listing,
     render_log_line,
+    render_memory_dashboard,
 )
 from tui.state import AppState, PendingBreakdown, PendingMVS
 
@@ -65,8 +63,8 @@ class TuiApp(App):
 
     CSS = """
     Screen { layout: vertical; }
-    #now { height: 5; border: solid $accent; padding: 0 1; }
-    #log { height: 1fr; border: solid $primary; padding: 0 1; }
+    #now { height: 1fr; border: solid $accent; padding: 1 2; }
+    #log { height: 8; border: solid $primary; padding: 0 1; }
     #input { dock: bottom; height: 3; }
     """
 
@@ -85,7 +83,7 @@ class TuiApp(App):
         self.timezone = timezone if timezone is not None else (env_tz or None)
 
     def compose(self) -> ComposeResult:
-        yield Static(EMPTY_TODAY, id="now")
+        yield Static(render_memory_dashboard({}, None), id="now")
         yield RichLog(id="log", highlight=False, markup=False, wrap=True)
         yield Input(placeholder="> 입력하거나 /명령어", id="input")
 
@@ -98,9 +96,9 @@ class TuiApp(App):
         log = self.query_one("#log", RichLog)
         log.write(render_log_line(verb, summary, action_id))
 
-    def set_now(self, payload: Any) -> None:
+    def set_now(self, payload: Any, coach: Any = None) -> None:
         self.state.today = payload if isinstance(payload, dict) else None
-        self.query_one("#now", Static).update(render_agenda(payload))
+        self.query_one("#now", Static).update(render_memory_dashboard(payload, coach))
 
     # ---------- input ----------
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -254,14 +252,9 @@ class TuiApp(App):
                 )
                 return
             if isinstance(cmd, Today):
-                agenda = self.client.get_agenda_now()
-                coach = self.client.get_coach_next()
-                self.call_from_thread(self.set_now, agenda)
-                coach_text = render_coach(coach)
-                if coach_text:
-                    for line in coach_text.splitlines():
-                        self.call_from_thread(self.log_line, "/coach", line)
-                self.call_from_thread(self.log_line, "/today", "Agenda refreshed")
+                agenda, coach = self._get_agenda_and_optional_coach()
+                self.call_from_thread(self.set_now, agenda, coach)
+                self.call_from_thread(self.log_line, "/오늘", "화면을 새로 정리했어")
                 return
             if isinstance(cmd, Inbox):
                 payload = self.client.list_inbox()
@@ -358,6 +351,16 @@ class TuiApp(App):
             self.call_from_thread(self.log_line, "error", str(exc))
 
     # ---------- Phase 6 helpers ----------
+    def _get_agenda_and_optional_coach(self) -> tuple[Any, Any | None]:
+        """Fetch agenda first; coach failure must not block the primary view."""
+        agenda = self.client.get_agenda_now()
+        try:
+            coach = self.client.get_coach_next()
+        except ClientError as exc:
+            self.call_from_thread(self.log_line, "error", f"코치 불러오기 실패: {exc}")
+            coach = None
+        return agenda, coach
+
     def _do_focus_start(self, target_type: str, target_id: int) -> None:
         try:
             payload = self.client.focus_start(target_type, target_id)
@@ -533,11 +536,11 @@ class TuiApp(App):
 
     def _refresh_now_in_thread(self) -> None:
         try:
-            payload = self.client.get_today()
+            agenda, coach = self._get_agenda_and_optional_coach()
         except ClientError as exc:
             self.call_from_thread(self.log_line, "error", str(exc))
             return
-        self.call_from_thread(self.set_now, payload)
+        self.call_from_thread(self.set_now, agenda, coach)
 
     def _show_listing(self, kind: str, payload: Any) -> None:
         listing = listing_from_payload(kind, payload)

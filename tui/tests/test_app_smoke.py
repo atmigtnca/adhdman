@@ -296,3 +296,43 @@ async def test_resolve_passes_adhdman_timezone(monkeypatch):
     import json as _json
     body = _json.loads(bodies[0])
     assert body == {"text": "tomorrow 3pm", "tz": "America/Los_Angeles"}
+
+
+@pytest.mark.asyncio
+async def test_today_renders_dashboard_even_when_coach_times_out():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/agenda/now":
+            return httpx.Response(
+                200,
+                json={
+                    "now": {"kind": "task", "id": 1, "title": "DB 과제", "reason": "마감이 가까워."},
+                    "next": [],
+                    "later": [],
+                    "counts": {"tasks": 1, "events": 0, "inbox": 0},
+                },
+            )
+        if request.url.path == "/coach/next":
+            raise httpx.TimeoutException("slow", request=request)
+        return httpx.Response(200, json={})
+
+    from textual.widgets import Input, Static
+
+    c = _mock_client(handler)
+    app = TuiApp(client=c)
+    async with app.run_test() as pilot:
+        inp = app.query_one("#input", Input)
+        inp.value = "/오늘"
+        await inp.action_submit()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        now_text = str(app.query_one("#now", Static).render())
+        assert "지금 해야 할 것" in now_text
+        assert "DB 과제" in now_text
+        assert "코치 제안" in now_text
+        assert "다음" in now_text
+        assert "요약" in now_text
+    c.close()
+    assert calls[:2] == ["/agenda/now", "/coach/next"]

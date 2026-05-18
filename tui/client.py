@@ -10,6 +10,7 @@ import httpx
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_TIMEOUT_SECONDS = 15.0
 
 
 class ClientError(Exception):
@@ -49,7 +50,7 @@ class TuiClient:
         self,
         base_url: str | None = None,
         *,
-        timeout: float = 5.0,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
         allow_remote: bool | None = None,
     ) -> None:

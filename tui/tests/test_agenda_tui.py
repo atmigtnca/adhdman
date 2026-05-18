@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import httpx
 
-from tui.client import TuiClient
-from tui.rendering import render_agenda, render_coach
+from tui.client import DEFAULT_TIMEOUT_SECONDS, TuiClient
+from tui.rendering import render_agenda, render_coach, render_memory_dashboard
 
 
 def _mock_transport(handler):
@@ -11,6 +11,7 @@ def _mock_transport(handler):
 
 
 def test_client_get_agenda_now_hits_read_only_path_with_now_param():
+    assert DEFAULT_TIMEOUT_SECONDS >= 12.0
     seen: list[tuple[str, str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -111,3 +112,33 @@ def test_render_agenda_empty_state_is_calm():
 
     assert "지금은 비어 있어" in rendered
     assert "TUI" in rendered
+
+
+def test_render_memory_dashboard_matches_web_ui_structure_without_log_rows():
+    rendered = render_memory_dashboard(
+        {
+            "now": {
+                "kind": "task",
+                "id": 7,
+                "title": "DB 과제",
+                "reason": "마감이 가장 가까워요.",
+                "due_at": "2026-06-01T01:00:00+09:00",
+            },
+            "next": [{"kind": "event", "title": "오스카 모임", "starts_at": "13:00"}],
+            "later": [{"kind": "task", "title": "CPP 과제"}],
+            "counts": {"tasks": 2, "events": 1, "inbox": 0},
+        },
+        {
+            "message": "딱 2분만 시작하자.",
+            "tiny_step": "DB 과제 파일 열기",
+            "suggested_commands": ["/집중 1", "/쪼개기 1"],
+        },
+    )
+
+    assert "지금 해야 할 것" in rendered
+    assert "DB 과제" in rendered
+    assert "코치 제안" in rendered
+    assert "다음" in rendered
+    assert "요약" in rendered
+    assert "Agenda refreshed" not in rendered
+    assert "/coach" not in rendered
