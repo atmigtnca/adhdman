@@ -32,6 +32,7 @@ from tui.commands import (
     Quit,
     Resolve,
     Search,
+    SLASH_COMMAND_MENU,
     StuckApply,
     StuckOptions,
     SurvivalOff,
@@ -107,6 +108,14 @@ class TuiApp(App):
         self.state.push_history(line)
         cmd = self._parse_with_listing_context(line)
         self.dispatch(cmd)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.value.strip() == "/":
+            self._show_slash_command_menu()
+
+    def _show_slash_command_menu(self) -> None:
+        for hline in SLASH_COMMAND_MENU.splitlines():
+            self.log_line("/", hline)
 
     def _parse_with_listing_context(self, line: str) -> Command:
         """Bare numbers and non-slash 'pick N' route to Pick when a listing exists."""

@@ -391,3 +391,19 @@ async def test_capture_refreshes_web_memory_dashboard():
         assert "코치 제안" in now_text
     c.close()
     assert calls[:3] == ["/capture", "/agenda/now", "/coach/next"]
+
+
+def test_slash_input_change_shows_compact_command_menu():
+    app = TuiApp(client=_mock_client(lambda r: httpx.Response(200, json={})))
+    seen: list[tuple[str, str]] = []
+    app.log_line = lambda verb, summary, action_id=None: seen.append((verb, summary))  # type: ignore[method-assign]
+
+    app.on_input_changed(type("Event", (), {"value": "/"})())
+
+    app.client.close()
+    assert seen
+    assert seen[0] == ("/", "명령어를 고를 수 있어.")
+    summaries = "\n".join(summary for _, summary in seen)
+    assert "/오늘" in summaries
+    assert "/집중 N" in summaries
+    assert "/도움말" in summaries
